@@ -175,13 +175,15 @@ def find_it_cf(text: str, allow: Iterable[str] = ()) -> Iterator[Finding]:
         yield Finding("it-cf", m.start(), m.end(), mask(s), "Italian codice fiscale, check character valid")
 
 
-# Nine and eleven digit numbers are everywhere (orders, phones), and the BSN and PESEL checks are weak
-# enough that a random number passes often. These two are matched only next to their label.
+# Nine and eleven digit numbers are everywhere (orders, phones), and the BSN, PESEL and personnummer checks are
+# weak enough that a random number passes often. These three are matched only next to their label.
 _LABEL_WINDOW = 40
 _BSN = re.compile(r"\d(?<!\d\d)\d{8}(?!\d)")
 _BSN_LABEL = re.compile(r"(?i)\b(?:bsn|burgerservicenummer|sofi(?:nummer)?)\b")
 _PESEL = re.compile(r"\d(?<!\d\d)\d{10}(?!\d)")
 _PESEL_LABEL = re.compile(r"(?i)\bpesel\b")
+_SE_PNR = re.compile(r"(?<!\d)(\d{6})([-+]?)(\d{4})(?!\d)")
+_SE_PNR_LABEL = re.compile(r"(?i)\b(?:personnummer|samordningsnummer)\b")
 
 
 def _labelled(label: "re.Pattern[str]", text: str, start: int) -> bool:
@@ -228,6 +230,39 @@ def find_pl_pesel(text: str, allow: Iterable[str] = ()) -> Iterator[Finding]:
             continue
         if _labelled(_PESEL_LABEL, text, m.start()):
             yield Finding("pl-pesel", m.start(), m.end(), mask(s), "Polish PESEL next to its label, checksum valid")
+
+
+def se_personnummer_valid(s: str, sep: str = "-") -> bool:
+    """Swedish personnummer / samordningsnummer: YYMMDD, separator, NNNC, Luhn over the nine digits before C.
+
+    A coordination number adds 60 to the day. The two-digit year leaves the century open: "-" means the
+    person is under 100 (this or the previous century), "+" means 100 or older (previous centuries).
+    """
+    if len(s) != 10 or not s.isdigit() or sep not in ("", "-", "+") or len(set(s)) == 1:
+        return False
+    if not luhn_valid(s):
+        return False
+    yy, mm, dd = int(s[0:2]), int(s[2:4]), int(s[4:6])
+    if dd > 60:
+        dd -= 60
+    centuries = (1800, 1900) if sep == "+" else (1900, 2000)
+    for century in centuries:
+        try:
+            date(century + yy, mm, dd)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
+def find_se_personnummer(text: str, allow: Iterable[str] = ()) -> Iterator[Finding]:
+    for m in _SE_PNR.finditer(text):
+        s = m.group(1) + m.group(3)
+        if m.group() in allow or s in allow or not se_personnummer_valid(s, m.group(2)):
+            continue
+        if _labelled(_SE_PNR_LABEL, text, m.start()):
+            yield Finding("se-personnummer", m.start(), m.end(), mask(m.group()),
+                          "Swedish personnummer next to its label, Luhn and date valid")
 
 
 # --------------------------------------------------------------------------- IBAN
@@ -573,6 +608,7 @@ def _find_pii(text: str, allow: Iterable[str], allow_domains: Iterable[str]) -> 
     yield from find_it_cf(text, allow)
     yield from find_nl_bsn(text, allow)
     yield from find_pl_pesel(text, allow)
+    yield from find_se_personnummer(text, allow)
     yield from find_iban(text, allow)
     yield from find_card(text, allow)
     yield from find_email(text, allow, allow_domains)

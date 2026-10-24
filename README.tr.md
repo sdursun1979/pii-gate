@@ -44,6 +44,7 @@ sonra `/hooks` adımını tekrarlayın. Tek bir depoya kurmak için `--project` 
 | `it-cf`           | engel      | İtalya codice fiscale (kontrol karakteri ve doğum günü doğrulanır)        |
 | `nl-bsn`          | engel      | Hollanda BSN (11 kontrolü), yalnız `BSN` etiketinin yanında               |
 | `pl-pesel`        | engel      | Polonya PESEL (sağlama ve doğum tarihi), yalnız `PESEL` etiketinin yanında |
+| `se-personnummer` | engel      | İsveç personnummer / samordningsnummer (Luhn ve doğum tarihi), yalnız `personnummer` veya `samordningsnummer` etiketinin yanında |
 | `iban`            | engel      | IBAN (mod-97 ve SWIFT kayıt defterindeki ülke uzunluğu)                   |
 | `card`            | engel      | Kart numarası (Luhn; Visa, Mastercard, Amex, Troy, MIR, UnionPay, JCB)     |
 | `secret`          | engel      | Özel anahtarlar; AWS, OpenAI/Anthropic, GitHub, GitLab, Slack, Google, Stripe, npm, PyPI, Hugging Face, SendGrid, Telegram, Azure anahtarları; JWT; URL içindeki ve `Authorization` başlığındaki parolalar |

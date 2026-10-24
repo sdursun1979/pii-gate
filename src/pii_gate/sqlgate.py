@@ -28,6 +28,7 @@ CORE_COLUMNS: Set[str] = {
     "ethnicity", "diagnosis", "tani", "icd", "icd10", "health_record", "medical_record", "biometric",
     "fingerprint", "genetic", "blood_type", "kan_grubu",
     "dni", "nie", "nif", "codice_fiscale", "codicefiscale", "bsn", "burgerservicenummer", "pesel",
+    "personnummer", "samordningsnummer",
 }
 CONTEXT_COLUMNS: Set[str] = {
     "first_name", "firstname", "last_name", "lastname", "surname", "full_name", "fullname", "name",

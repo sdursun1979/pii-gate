@@ -38,7 +38,7 @@ names, counts and a masked first character.
    `cat file` in a shell, a `Grep` result, a database query result returned by an MCP server, or a
    file attached with `@` in Claude Code are not inspected before they reach the model. Control that
    side with least-privilege database accounts, masked views and the agents' own permission settings.
-2. **It is pattern based.** It finds identifiers with a checksum (TR, ES, IT, NL, PL), IBANs, cards,
+2. **It is pattern based.** It finds identifiers with a checksum (TR, ES, IT, NL, PL, SE), IBANs, cards,
    known secret formats and heuristic e-mail and phone numbers. It does not find a name, an address or
    a diagnosis written in free text. The SQL rules match column and table names; a view with renamed
    columns passes.

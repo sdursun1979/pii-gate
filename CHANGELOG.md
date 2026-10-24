@@ -45,6 +45,10 @@ the agents' current hook documentation and by trying to get data past the gate w
 
 ### Added
 
+- **Swedish personnummer / samordningsnummer** (`se-personnummer`): Luhn digit and birth date
+  verified, coordination numbers (day + 60) and the `+` separator for people over 100 understood;
+  matched only next to a `personnummer` or `samordningsnummer` label. `personnummer` and
+  `samordningsnummer` are core SQL columns. Contributed by bh-official (#7).
 - **Gemini CLI** support (`pii-gate install gemini`): `BeforeTool` and `BeforeAgent` events,
   `run_shell_command`, `write_file`, `replace`, `read_file`.
 - **Read gate** (`read`, default block): a `Read`/`read_file` of a local file whose content holds

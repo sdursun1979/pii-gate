@@ -73,6 +73,15 @@ def pesel(digits10: str) -> str:
     return digits10 + str((10 - total % 10) % 10)
 
 
+def personnummer(digits9: str) -> str:
+    """Nine digits (YYMMDD plus three serial digits) plus the Luhn digit, as the ten digits without separator."""
+    total = 0
+    for i, ch in enumerate(reversed(digits9)):
+        d = int(ch) * (2 if i % 2 == 0 else 1)
+        total += d - 9 if d > 9 else d
+    return digits9 + str((10 - total % 10) % 10)
+
+
 DNI_A = dni("48573920")
 NIE_A = nie("Y", "2846193")
 CF_A = codice_fiscale("TSTPRS90A41Z404")        # synthetic: female, 1 January 1990, born abroad
@@ -81,6 +90,13 @@ CF_BAD_DAY = codice_fiscale("TSTPRS90A35Z404")   # check character fine, day 35 
 BSN_A = bsn("10203040")
 PESEL_A = pesel("9001011234")                    # 1 January 1990
 PESEL_BAD_DATE = pesel("9013011234")             # month 13
+_PNR = personnummer("900101123")                 # 1 January 1990, serial 123
+PNR_A = _PNR[:6] + "-" + _PNR[6:]
+PNR_PLUS = PNR_A.replace("-", "+")               # same digits, written for a person over 100
+_SAM = personnummer("900161123")
+SAMORDNING_A = _SAM[:6] + "-" + _SAM[6:]         # coordination number: day 1 + 60
+_BAD = personnummer("901301123")
+PNR_BAD_DATE = _BAD[:6] + "-" + _BAD[6:]         # month 13
 
 
 # --------------------------------------------------------------------------- formatting helpers
