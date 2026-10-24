@@ -49,10 +49,11 @@ _OUTBOUND_INPUT = re.compile(
     r"(?<![\w.-])(?:curl|wget|iwr|irm|Invoke-WebRequest|Invoke-RestMethod|ssh|nc|ncat|netcat|socat"
     r"|openssl|telnet|nslookup|dig|ping|xdg-open|Start-Process)(?:\.exe)?\b[^|&;]*(?:<|\$\(|`)", re.I)
 _ALWAYS_UPLOAD = re.compile(
-    r"(?<![\w.-])(?:scp|sftp|rsync|rclone|Start-BitsTransfer|ftp|lftp|tftp|smbclient|ncftpput|azcopy|s3cmd"
+    r"(?<![\w.-])(?:scp|sftp|rsync|rclone|Start-BitsTransfer|ftp|lftp|tftp|smbclient|ncftpput|s3cmd"
     r"|mail|mailx|sendmail|msmtp|mutt|swaks|Send-MailMessage|clip|pbcopy|xclip|xsel|wl-copy|Set-Clipboard"
     r"|ngrok|cloudflared|localtunnel)(?:\.exe)?(?![\w.@-])"
-    r"|\baws\s+s3(?:api)?\s+(?:cp|sync|mv|put-object)\b|\bgsutil\s+(?:cp|rsync|mv)\b"
+    r"|\baws\s+s3\s+(?:cp|sync|mv)\b|\baws\s+s3api\s+put-object(?![\w-])|\bgsutil\s+(?:cp|rsync|mv)\b"
+    r"|\bazcopy(?:\.exe)?\s+(?:copy|cp|sync)\b"
     r"|\bgcloud\s+storage\s+(?:cp|rsync|mv)\b|\baz\s+storage\s+(?:blob|file)\s+upload"
     r"|\bmc\s+(?:cp|mirror|put)\b|\bb2\s+(?:upload-file|file\s+upload)\b"
     r"|\bgh\s+(?:gist\s+create|release\s+(?:create|upload)|(?:issue|pr)\s+create\b[^|&;]*--body-file"
