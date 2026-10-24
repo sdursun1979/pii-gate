@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 import fnmatch
-import os
+import posixpath
+import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 from . import detectors, exfil, sqlgate
 from .config import Config
 from .detectors import Finding
+
+_DRIVE = re.compile(r"^[A-Za-z]:")
 
 
 @dataclass
@@ -64,21 +67,34 @@ class Engine:
         return self.report(self.findings(command, command=True))
 
     # ------------------------------------------------------------------ paths
-    def path_allowed(self, path: str, cwd: Optional[str] = None) -> bool:
-        """True when the path matches an allow_paths glob (synthetic fixtures, docs with examples)."""
+    def path_allowed(self, path: str, root: Optional[str] = None) -> bool:
+        """True when the path matches an allow_paths glob (synthetic fixtures, docs with examples).
+
+        Relative patterns (`tests/*`) are matched against the path relative to the project root, so
+        they can never exempt a file outside the project. Absolute patterns match absolute paths.
+        `..` segments are resolved first (`tests/../src/x` is `src/x`); a path that still escapes
+        upwards is never allowed. fnmatch semantics: `*` also matches `/`.
+        """
         if not path or not self.config.allow_paths:
             return False
-        norm = path.replace("\\", "/")
-        variants = {norm, os.path.basename(norm)}
-        if norm.startswith("./"):
-            variants.add(norm[2:])
-        if cwd:
-            root = cwd.replace("\\", "/").rstrip("/") + "/"
-            if norm.startswith(root):
-                variants.add(norm[len(root):])
+        norm = posixpath.normpath(path.replace("\\", "/"))
+        if norm.startswith("../") or norm == "..":
+            return False
+        absolute = norm.startswith("/") or _DRIVE.match(norm) is not None
+        rel: Optional[str] = None if absolute else norm
+        if root:
+            prefix = posixpath.normpath(root.replace("\\", "/")).rstrip("/") + "/"
+            if norm.lower().startswith(prefix.lower()):
+                rel = norm[len(prefix):]
         for pattern in self.config.allow_paths:
             pat = pattern.replace("\\", "/")
-            if any(fnmatch.fnmatch(v, pat) for v in variants):
+            if pat.startswith("./"):
+                pat = pat[2:]
+            pat_absolute = pat.startswith("/") or _DRIVE.match(pat) is not None
+            if pat_absolute:
+                if fnmatch.fnmatch(norm, pat):
+                    return True
+            elif rel is not None and fnmatch.fnmatch(rel, pat):
                 return True
         return False
 

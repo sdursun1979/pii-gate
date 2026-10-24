@@ -1,0 +1,9 @@
+{
+  "_comment": "Project config (<repo>/.pii-gate.json): tightening only, paths relative to the project root.",
+  "rules": { "email": "block", "phone": "block" },
+  "allow_paths": ["tests/fixtures/*"],
+  "sql": {
+    "extra_pii_columns": ["member_no"],
+    "extra_person_tables": ["donor"]
+  }
+}

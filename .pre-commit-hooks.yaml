@@ -1,0 +1,7 @@
+- id: pii-gate
+  name: pii-gate (personal data and secrets)
+  description: Blocks commits whose files contain national IDs, IBANs, card numbers, secrets or PII-selecting SQL.
+  entry: pii-gate scan
+  language: python
+  pass_filenames: true
+  types: [text]

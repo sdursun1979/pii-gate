@@ -1,18 +1,20 @@
 {
+  "_comment": "Home config (~/.pii-gate.json). A project .pii-gate.json may only tighten the gate; see README.",
   "rules": {
     "email": "block",
     "git-push": "off",
     "sql-pii-context": "block"
   },
   "allow_values": ["12345678950"],
-  "allow_paths": ["tests/*", "fixtures/*"],
+  "allow_paths": ["tests/fixtures/*", "docs/examples/*"],
   "email_allow_domains": ["mycompany.example"],
   "sql": {
-    "extra_pii_columns": ["protocol_no", "insurance_no"],
+    "extra_pii_columns": ["member_no", "policy_number"],
     "extra_person_tables": ["donor", "guardian"],
     "ignore_columns": ["name"]
   },
   "scan_prompts": true,
   "fail_open": false,
-  "log": true
+  "log": true,
+  "trust_project_config": false
 }

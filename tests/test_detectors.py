@@ -187,6 +187,228 @@ class NationalIdEngineTests(unittest.TestCase):
             rep = Engine().scan_text(f"SELECT {col} FROM orders")
             self.assertEqual(list(rep.counts()), ["sql-pii"], col)
 
+class NormalisationTests(unittest.TestCase):
+    def test_invisible_characters_do_not_split_a_value(self):
+        for ch in ("\u200b", "\u200c", "\u200d", "\u2060", "\ufeff", "\u00ad"):
+            text = syn.TCKN_A[:5] + ch + syn.TCKN_A[5:]
+            found = list(d.find_pii(text))
+            self.assertEqual(rules(found), ["tckn"], repr(ch))
+            self.assertEqual(found[0].sample, syn.TCKN_A[0] + "***")
+        self.assertEqual(rules(d.find_pii(syn.IBAN_TR[:10] + "\u200b" + syn.IBAN_TR[10:])), ["iban"])
+        self.assertEqual(rules(d.find_secrets(syn.GITHUB_TOKEN[:8] + "\u200b" + syn.GITHUB_TOKEN[8:])), ["secret"])
+
+    def test_no_break_space_and_fullwidth_digits(self):
+        self.assertEqual(rules(d.find_pii(syn.grouped(syn.CARD_VISA, sep="\u00a0"))), ["card"])
+        self.assertEqual(rules(d.find_pii(syn.fullwidth(syn.TCKN_A))), ["tckn"])
+        self.assertEqual(rules(d.find_pii(syn.fullwidth(syn.CARD_VISA))), ["card"])
+        self.assertEqual(rules(d.find_pii(syn.fullwidth(syn.IBAN_TR))), ["iban"])
+
+    def test_offsets_refer_to_the_original_text(self):
+        zw = chr(0x200b)
+        text = "a" + zw + "b " + syn.TCKN_A[:5] + zw + syn.TCKN_A[5:] + " " + zw + syn.CARD_VISA
+        found = list(d.find_pii(text))
+        self.assertEqual([text[f.start:f.end] for f in found],
+                         [syn.TCKN_A[:5] + zw + syn.TCKN_A[5:], syn.CARD_VISA])
+        text = zw + "password = " + zw + syn.SYN_PASSWORD
+        self.assertEqual([text[f.start:f.end] for f in d.find_secrets(text)], [syn.SYN_PASSWORD])
+
+    def test_plain_text_is_untouched(self):
+        self.assertEqual(d.normalise("abc 123"), "abc 123")
+        self.assertEqual(d.normalise("a\u00a0b\u200bc"), "a bc")
+
+
+class GroupedTcknTests(unittest.TestCase):
+    def test_space_and_dot_groups(self):
+        for sep in (" ", "."):
+            found = list(d.find_tckn("tc: " + syn.tckn_grouped(syn.TCKN_A, sep)))
+            self.assertEqual(rules(found), ["tckn"], sep)
+            self.assertEqual(found[0].sample, syn.TCKN_A[0] + "***")
+
+    def test_phones_mixed_separators_and_longer_runs_are_ignored(self):
+        broken = syn.TCKN_A[:-1] + str((int(syn.TCKN_A[-1]) + 1) % 10)
+        mixed = syn.TCKN_A[:3] + " " + syn.TCKN_A[3:6] + "." + syn.TCKN_A[6:9] + " " + syn.TCKN_A[9:]
+        for text in ("+90 532 123 45 67", "0532 123 45 67", "532 123 45 67", "90 532 123 45 67", mixed,
+                     "1 " + syn.tckn_grouped(syn.TCKN_A), syn.tckn_grouped(syn.TCKN_A) + " 12",
+                     syn.tckn_grouped(broken), syn.tckn_grouped("10000000146")):
+            self.assertEqual(list(d.find_tckn(text)), [], text)
+
+
+class IbanFormatTests(unittest.TestCase):
+    def test_case_hyphens_and_glued_label(self):
+        for text in (syn.IBAN_TR.lower(), "IBAN" + syn.IBAN_TR, syn.grouped(syn.IBAN_TR, sep="-"),
+                     syn.IBAN_TR[:2].lower() + syn.IBAN_TR[2:]):
+            found = list(d.find_iban(text))
+            self.assertEqual(rules(found), ["iban"], text)
+            self.assertEqual(found[0].sample, "T***")
+
+    def test_trailing_text_does_not_hide_the_iban(self):
+        spaced = syn.grouped(syn.IBAN_TR)
+        for text in (spaced + " TL", spaced + " USD 1500", spaced + " 2024", spaced + "\n2024",
+                     syn.IBAN_TR + " 15000 TL", syn.IBAN_TR + " X"):
+            self.assertEqual(rules(d.find_iban(text)), ["iban"], text)
+
+    def test_two_ibans_in_a_row(self):
+        self.assertEqual(rules(d.find_iban(syn.IBAN_TR + " " + syn.IBAN_GB)), ["iban", "iban"])
+        spaced = syn.grouped(syn.IBAN_TR)
+        self.assertEqual(rules(d.find_iban(spaced + " " + spaced)), ["iban", "iban"])
+
+    def test_registry_countries(self):
+        for value in (syn.IBAN_AL, syn.IBAN_LI, syn.IBAN_RU):
+            self.assertEqual(rules(d.find_iban(value)), ["iban"], value)
+        self.assertEqual(len(d.IBAN_LENGTHS), 88)
+        for cc, n in {"AL": 28, "AD": 24, "BA": 20, "BR": 29, "BY": 28, "CR": 22, "DO": 28, "FO": 18, "GI": 23,
+                      "GL": 18, "GT": 28, "IQ": 23, "JO": 30, "LB": 28, "LC": 32, "LI": 21, "LY": 25, "MC": 27,
+                      "MD": 24, "ME": 22, "MK": 19, "MR": 27, "MU": 30, "PK": 24, "PS": 29, "RS": 22, "SC": 31,
+                      "SI": 19, "SM": 27, "ST": 25, "SV": 28, "TL": 23, "TN": 24, "UA": 29, "VA": 22, "VG": 24,
+                      "XK": 20}.items():
+            self.assertEqual(d.IBAN_LENGTHS[cc], n, cc)
+
+    def test_near_misses(self):
+        for text in (syn.iban("XX", "0881000123456789012"),          # not an IBAN country, mod 97 fine
+                     syn.IBAN_TR + "1", "x" + syn.IBAN_TR,             # glued to more characters
+                     "de12" + "a" * 36,                                # hash-like run, cut inside a group
+                     syn.IBAN_TR[:2] + "00" + syn.IBAN_TR[4:]):
+            self.assertEqual(list(d.find_iban(text)), [], text)
+
+
+class CardFormatTests(unittest.TestCase):
+    def test_dots_expiry_and_cvv(self):
+        spaced = syn.grouped(syn.CARD_VISA)
+        for text in (syn.grouped(syn.CARD_VISA, sep="."), spaced + " 12/26", spaced + " 1", syn.CARD_VISA + " 123",
+                     syn.CARD_VISA + "-123", "kart " + spaced + " son kullanma 12/26"):
+            found = list(d.find_card(text))
+            self.assertEqual(rules(found), ["card"], text)
+            self.assertEqual(found[0].sample, "4***")
+
+    def test_more_issuer_ranges(self):
+        for value in (syn.CARD_MC2, syn.CARD_MIR, syn.CARD_TROY, syn.CARD_AMEX, syn.card("272012345678901")):
+            self.assertEqual(rules(d.find_card(value)), ["card"], value)
+
+    def test_two_cards(self):
+        self.assertEqual(rules(d.find_card(syn.CARD_VISA + " " + syn.CARD_MC)), ["card", "card"])
+
+    def test_near_misses(self):
+        for text in (syn.card("979112345678901"), syn.card("220512345678901"), syn.card("272112345678901"),
+                     syn.card("153957876362148"), "4111 1111 1111 1111 1", "1729770000" + syn.CARD_VISA,
+                     " ".join(syn.CARD_VISA + "121")):           # single digits: no shorter-run retry
+            self.assertEqual(list(d.find_card(text)), [], text)
+
+
+class SecretFormatTests(unittest.TestCase):
+    TOKENS = {
+        "Stripe key": syn.STRIPE_KEY, "GitLab token": syn.GITLAB_TOKEN, "npm token": syn.NPM_TOKEN,
+        "Hugging Face token": syn.HF_TOKEN, "PyPI token": syn.PYPI_TOKEN, "SendGrid key": syn.SENDGRID_KEY,
+        "Slack webhook": syn.SLACK_WEBHOOK,
+        "Telegram bot token": syn.TELEGRAM_TOKEN, "age secret key": syn.AGE_KEY,
+        "AWS secret key": "aws_secret_access_key = " + syn.AWS_SECRET,
+        "Azure storage key": "DefaultEndpointsProtocol=https;AccountName=x;AccountKey=" + syn.AZURE_KEY + ";",
+        "credentials in URL": "postgres://app:" + syn.SYN_PASSWORD + "@db.internal:5432/prod",
+        "Authorization header": "curl -H 'Authorization: Bearer " + syn.BEARER_TOKEN + "' https://api.internal",
+        "private key": "-----BEGIN PGP PRIVATE KEY BLOCK-----",
+    }
+
+    def test_new_formats_block_once_and_never_leak(self):
+        for label, text in self.TOKENS.items():
+            found = list(d.find_secrets(text))
+            self.assertEqual([(f.rule, f.note) for f in found], [("secret", label)], text)
+            self.assertTrue(found[0].sample.endswith("***"))
+            self.assertEqual(len(found[0].sample), 4)
+
+    def test_more_url_and_header_forms(self):
+        for text in ("redis://:" + syn.SYN_PASSWORD + "@redis:6379/0",
+                     "mongodb+srv://app:" + syn.SYN_PASSWORD + "@cluster.internal/db",
+                     "AWS_SECRET_ACCESS_KEY=" + syn.AWS_SECRET,
+                     '{"Authorization": "Basic ' + syn.BEARER_TOKEN + '"}',
+                     "https://api.telegram.org/bot" + syn.TELEGRAM_TOKEN + "/getMe",
+                     "rk_test_" + syn.STRIPE_KEY[8:]):
+            self.assertEqual(rules(d.find_secrets(text)), ["secret"], text)
+
+    def test_near_misses_stay_clean(self):
+        for text in ("https://github.com/org/repo", "postgres://localhost/db", "https://user@host/", "file:///C:/x",
+                     "http://example.com:8080/path", "https://x:y@h", "postgres://user:password@localhost/db",
+                     "postgres://user:${DB_PASS}@localhost/db", "Authorization: Bearer <token>",
+                     "Authorization: Bearer $TOKEN", 'headers = {"Authorization": f"Bearer {token}"}',
+                     "Authorization: Bearer YOUR_TOKEN_HERE_123456", "git@github.com:org/repo.git",
+                     "pk_live_" + syn.STRIPE_KEY[8:], "npm_config_registry=https://registry.npmjs.org",
+                     syn.SLACK_WEBHOOK_PLACEHOLDER,
+                     "aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+                     "123" + syn.TELEGRAM_TOKEN):                       # 12-digit id: not a bot id
+            self.assertEqual(list(d.find_secrets(text)), [], text)
+
+    def test_jwt_is_not_excused_by_placeholder_words(self):
+        jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJzeW50aGV0aWMifQ.xxx" + "Zq7Wm2Lp9Xr4Tn6V"
+        self.assertEqual(rules(d.find_secrets(jwt)), ["secret"])
+
+
+class AssignmentTests(unittest.TestCase):
+    PW = syn.SYN_PASSWORD
+
+    def test_config_shapes_are_caught(self):
+        pw = self.PW
+        for text in ('{"password": "%s"}' % pw, "POSTGRES_PASSWORD=" + pw, "export DB_PASSWORD=" + pw,
+                     "ADMIN_PASSWORD: " + pw, "DB_PASS=" + pw, "SECRET_KEY=" + pw, "SECRET_KEY_BASE=" + pw,
+                     "secretKey: " + pw, "private_key=" + pw, 'password := "%s"' % pw, "'password' => '%s'" % pw,
+                     "Password=%s;TrustServerCertificate=true" % pw, "client_secret: " + pw, "passphrase = " + pw,
+                     "password2 = " + pw, 'password = "' + pw):
+            found = list(d.find_secrets(text))
+            self.assertEqual(rules(found), ["secret-assign"], text)
+            self.assertEqual(found[0].sample, pw[0] + "***")
+        self.assertEqual(rules(d.find_secrets('password="S3cret Passw0rd"')), ["secret-assign"])
+
+    def test_passwords_with_code_like_characters_are_caught(self):
+        for value in ("Pa$$w0rd!longer", "trueLove1234!", "NoneShallPass1!", "S3cret(Passw0rd)", "100%Secure2024"):
+            self.assertEqual(rules(d.find_secrets("password = '%s'" % value)), ["secret-assign"], value)
+        self.assertEqual(rules(d.find_secrets("DB_PASSWORD=mypassword123")), ["secret-assign"])
+
+    def test_code_and_references_stay_clean(self):
+        for text in ("password = request.form['password']", "password = self._password", "password = password_hash",
+                     "password: Optional[str] = None", "password: '**********'", 'password = os.environ["PW"]',
+                     "password = os.getenv('PW')", "password: ${DB_PASSWORD}", "password = '$(cat /run/secrets/db)'",
+                     "password = '%(password)s'", "password = $DB_PASSWORD", "password = secrets.token_hex(16)",
+                     "password = hashlib.sha256(raw).hexdigest()", "password = getpass.getpass()",
+                     "api_key: process.env.API_KEY", "password = user.password", "password = DB_PASSWORD",
+                     "password = hashedPassword", 'password = "{password}"', "PWD=/home/user/project",
+                     "POSTGRES_PASSWORD_FILE=/run/secrets/pg", "password = 'changeme123'"):
+            self.assertEqual(list(d.find_secrets(text)), [], text)
+
+    def test_names_that_only_contain_a_keyword(self):
+        for text in ("token_count = 12345678", "tokenizer = AutoTokenizer", "keyboard_shortcuts = settings",
+                     "password_hash = abcdefghijkl", "password_reset_url = https://site.io/reset",
+                     "secretary_name = Alice_Wonderland", "passport_no = 12345678", "bypass = something_long",
+                     "access_token_ttl = 86400000", "monkey_key = 12345678", "session_token = abcdefghijkl"):
+            self.assertEqual(list(d.find_secrets(text)), [], text)
+
+    def test_reported_once_when_a_token_pattern_matches(self):
+        found = list(d.find_secrets("aws_secret_access_key = " + syn.AWS_SECRET))
+        self.assertEqual([f.note for f in found], ["AWS secret key"])
+
+
+class EmailFormatTests(unittest.TestCase):
+    def test_sentence_final_dot(self):
+        for text in ("write to ayse.k@somecompany.com.tr.", "ayse.k@somecompany.com.tr. Next", "mail ayse@corp.io: hi"):
+            found = list(d.find_email(text))
+            self.assertEqual(rules(found), ["email"], text)
+            self.assertEqual(found[0].sample, "a***")
+
+    def test_ssh_addresses_are_not_mailboxes(self):
+        for text in ("git@github.com:org/repo.git", "deploy@build.corp.io:/var/www", "ssh git@corp.io",
+                     "git clone git@gitlab.corp.io:team/app.git"):
+            self.assertEqual(list(d.find_email(text)), [], text)
+
+
+class SpanishIdFormatTests(unittest.TestCase):
+    def test_separators_after_nie_letter_and_before_check_letter(self):
+        n = syn.NIE_A
+        for text in (f"{n[0]}-{n[1:8]}-{n[8]}", f"{n[0]} {n[1:8]} {n[8]}", f"{syn.DNI_A[:8]} {syn.DNI_A[8]}"):
+            found = list(d.find_es_id(text))
+            self.assertEqual(rules(found), ["es-dni"], text)
+            self.assertEqual(found[0].sample, text[0] + "***")
+
+    def test_wrong_letter_with_separator(self):
+        wrong = "A" if syn.DNI_A[8] != "A" else "B"
+        self.assertEqual(list(d.find_es_id(f"{syn.DNI_A[:8]} {wrong}")), [])
+        self.assertEqual(list(d.find_es_id("12345678-Z")), [])
+
 
 class MaskTests(unittest.TestCase):
     def test_mask_never_leaks(self):

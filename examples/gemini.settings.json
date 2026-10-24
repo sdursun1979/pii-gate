@@ -1,0 +1,29 @@
+{
+  "hooks": {
+    "BeforeTool": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "name": "pii-gate",
+            "type": "command",
+            "command": "/usr/bin/python3 -P -m pii_gate hook",
+            "timeout": 20000
+          }
+        ]
+      }
+    ],
+    "BeforeAgent": [
+      {
+        "hooks": [
+          {
+            "name": "pii-gate",
+            "type": "command",
+            "command": "/usr/bin/python3 -P -m pii_gate hook",
+            "timeout": 20000
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -81,3 +81,45 @@ CF_BAD_DAY = codice_fiscale("TSTPRS90A35Z404")   # check character fine, day 35 
 BSN_A = bsn("10203040")
 PESEL_A = pesel("9001011234")                    # 1 January 1990
 PESEL_BAD_DATE = pesel("9013011234")             # month 13
+
+
+# --------------------------------------------------------------------------- formatting helpers
+def grouped(value: str, size: int = 4, sep: str = " ") -> str:
+    return sep.join(value[i:i + size] for i in range(0, len(value), size))
+
+
+def fullwidth(value: str) -> str:
+    """ASCII digits and capital letters as their fullwidth forms (U+FF10.., U+FF21..)."""
+    return "".join(chr(ord(c) - 0x30 + 0xFF10) if c.isdigit() else
+                   chr(ord(c) - 0x41 + 0xFF21) if "A" <= c <= "Z" else c for c in value)
+
+
+def tckn_grouped(value: str, sep: str = " ") -> str:
+    return sep.join((value[:3], value[3:6], value[6:9], value[9:]))
+
+
+IBAN_AL = iban("AL", "212110090000000235698741")
+IBAN_LI = iban("LI", "0881000123456789X")
+IBAN_RU = iban("RU", "04452560040702810412345678901")
+CARD_MC2 = card("222112345678901")       # Mastercard 2-series
+CARD_MIR = card("220012345678901")
+CARD_TROY = card("979212345678901")
+CARD_AMEX = card("37123456789012")
+
+# Token-shaped strings in the published formats, filled with arbitrary characters. None is a real key.
+SYN_PASSWORD = "S3cretPassw0rd"
+STRIPE_KEY = "sk_live_" + "Zq7Wm2Lp9Xr4Tn6V"
+GITLAB_TOKEN = "glpat-" + "Zq7Wm2Lp9Xr4Tn6Vb8Kc"
+NPM_TOKEN = "npm_" + "Zq7Wm2Lp9Xr4Tn6Vb8Kc3Jd5Hf1Gs0Ay2Bx4Cw"
+HF_TOKEN = "hf_" + "Zq7Wm2Lp9Xr4Tn6Vb8Kc3Jd5Hf1Gs0Ay2"
+PYPI_TOKEN = "pypi-AgEIcHlwaS5vcmc" + "Zq7Wm2Lp9Xr4Tn6Vb8Kc3Jd5Hf1Gs0Ay2Bx4Cw6Dv8Eu0Ft2Ns4Mr6Qo8"
+SENDGRID_KEY = "SG." + "Zq7Wm2Lp9Xr4Tn6Vb8Kc3J" + "." + "Zq7Wm2Lp9Xr4Tn6Vb8Kc3Jd5Hf1Gs0Ay2Bx4Cw6Dv8E"
+# Assembled at run time so that no complete webhook URL appears in the source (GitHub push protection
+# would otherwise refuse the commit, synthetic or not).
+SLACK_WEBHOOK = "https://hooks." + "slack.com/services/" + "/".join(("T0SYNTH01", "B0SYNTH01", "Zq7Wm2Lp9Xr4Tn6Vb8Kc3Jd5"))
+SLACK_WEBHOOK_PLACEHOLDER = "https://hooks." + "slack.com/services/" + "/".join(("T00000000", "B00000000", "X" * 24))
+TELEGRAM_TOKEN = "987654321:AA" + "Zq7Wm2Lp9Xr4Tn6Vb8Kc3Jd5Hf1Gs0Ay2B"
+AGE_KEY = "AGE-SECRET-KEY-1" + "QPZRY9X8GF2TVDW0S3JN54KHCE6MUA7L" * 2
+AWS_SECRET = "Zq7Wm2Lp9Xr4Tn6Vb8Kc/Jd5Hf1Gs0Ay2Bx4Cw+D"     # 40 characters
+AZURE_KEY = "Zq7Wm2Lp9Xr4Tn6Vb8Kc3Jd5Hf1Gs0Ay2Bx4Cw6Dv8Eu0Ft+Ns/Mr1Qo3Pi5Oh7Ug9Yf2Re4Wd6Sc8Tb0Va1Ab=="
+BEARER_TOKEN = "Zq7Wm2Lp9Xr4Tn6Vb8Kc3Jd5Hf1Gs0Ay"

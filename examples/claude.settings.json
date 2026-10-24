@@ -5,8 +5,15 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"/usr/bin/python3\" -m pii_gate hook",
-            "timeout": 20
+            "command": "/usr/bin/python3",
+            "args": [
+              "-P",
+              "-m",
+              "pii_gate",
+              "hook"
+            ],
+            "timeout": 20,
+            "onFailure": "block"
           }
         ]
       }
@@ -16,8 +23,15 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"/usr/bin/python3\" -m pii_gate hook",
-            "timeout": 20
+            "command": "/usr/bin/python3",
+            "args": [
+              "-P",
+              "-m",
+              "pii_gate",
+              "hook"
+            ],
+            "timeout": 20,
+            "onFailure": "block"
           }
         ]
       }

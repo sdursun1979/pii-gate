@@ -6,7 +6,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"/usr/bin/python3\" -m pii_gate hook",
+            "command": "/usr/bin/python3 -P -m pii_gate hook || { echo \"pii-gate hook failed to start; blocking\" >&2; exit 2; }",
+            "commandWindows": "/usr/bin/python3 -P -m pii_gate hook || (echo pii-gate hook failed to start; blocking 1>&2 & exit /b 2)",
             "timeout": 20,
             "statusMessage": "pii-gate"
           }
@@ -18,7 +19,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"/usr/bin/python3\" -m pii_gate hook",
+            "command": "/usr/bin/python3 -P -m pii_gate hook || { echo \"pii-gate hook failed to start; blocking\" >&2; exit 2; }",
+            "commandWindows": "/usr/bin/python3 -P -m pii_gate hook || (echo pii-gate hook failed to start; blocking 1>&2 & exit /b 2)",
             "timeout": 20,
             "statusMessage": "pii-gate"
           }

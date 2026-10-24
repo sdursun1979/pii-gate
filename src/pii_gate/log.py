@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import datetime as dt
-import os
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -21,7 +20,7 @@ def write(agent: str, event: str, tool: str, decision: str, counts: Dict[str, in
         path.parent.mkdir(parents=True, exist_ok=True)
         stamp = dt.datetime.now().replace(microsecond=0).isoformat()
         rules = ",".join(f"{k}={v}" for k, v in sorted(counts.items())) or "-"
-        with path.open("a", encoding="utf-8") as fh:
-            fh.write(f"{stamp} {agent} {event} {tool or '-'} {decision} {rules}{os.linesep}")
+        with path.open("a", encoding="utf-8") as fh:   # text mode translates "\n" per platform
+            fh.write(f"{stamp} {agent} {event} {tool or '-'} {decision} {rules}\n")
     except OSError:
         pass  # logging must never break the gate

@@ -14,7 +14,10 @@ need a new kind of identifier, add a generator there. CI runs `pii-gate scan .` 
 2. Register the rule name and its default level in `src/pii_gate/config.py`.
 3. Add tests: it fires on the synthetic value, it stays silent on a near miss (bad checksum, wrong
    length, documentation placeholder), the masked sample never contains the value.
-4. Document the rule in the README table.
+4. Keep it linear. Every regex runs on every tool call, and a stalled hook is a bypass in two of the
+   three agents. Time new patterns on a 5 MB input and on adversarial repetitions of their own tokens.
+5. Document the rule in the README table and, if it changes what the gate promises, in
+   `docs/threat-model.md`.
 
 Default levels: `block` only when false positives are rare (a checksum or a fixed token format).
 Heuristic patterns default to `warn`.
@@ -28,6 +31,9 @@ pii-gate scan .
 ```
 
 Python 3.9 is the floor; keep the code free of third-party dependencies.
+
+The repository's own `.pii-gate.json` allow-lists `tests/`, the READMEs and `examples/` for `scan`
+and for the read gate, because they contain documented example values.
 
 ## Reporting a bypass
 

@@ -1,0 +1,9 @@
+# Files the sdist needs beyond the package itself, so `python -m unittest discover -s tests`
+# runs from an unpacked sdist.
+include tests/*.py
+include CHANGELOG.md SECURITY.md CONTRIBUTING.md README.tr.md
+include examples/*.json
+include docs/*.md
+include .pii-gate.json
+recursive-exclude * __pycache__
+recursive-exclude * *.py[co]
