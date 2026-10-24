@@ -8,11 +8,12 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set
 
 RULES = (
-    "tckn", "es-dni", "it-cf", "nl-bsn", "pl-pesel", "iban", "card", "email", "phone", "secret", "secret-assign",
+    "tckn", "es-dni", "it-cf", "nl-bsn", "pl-pesel", "se-personnummer", "iban", "card", "email", "phone", "secret", "secret-assign",
     "exfil", "git-push", "tamper", "sql-pii", "sql-star", "sql-pii-context",
 )
 DEFAULT_LEVELS: Dict[str, str] = {
     "tckn": "block", "es-dni": "block", "it-cf": "block", "nl-bsn": "block", "pl-pesel": "block",
+    "se-personnummer": "block",
     "iban": "block", "card": "block", "secret": "block", "exfil": "block",
     "git-push": "block", "tamper": "block", "sql-pii": "block", "sql-star": "block",
     "email": "warn", "phone": "warn", "secret-assign": "warn", "sql-pii-context": "warn",

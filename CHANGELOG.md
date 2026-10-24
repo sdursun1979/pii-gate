@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Swedish personnummer and samordningsnummer (`se-personnummer`): Luhn digit and birth date verified,
+  coordination numbers (day + 60) and the `+` separator for people over 100 understood. Matched only next to a
+  `personnummer` or `samordningsnummer` label, because Luhn alone passes too many ordinary numbers.
+- SQL gate: `personnummer` and `samordningsnummer` are core columns.
+
 ## 0.2.0 (2026-10-23)
 
 - National IDs of four more countries, each with its checksum: Spanish DNI/NIE (`es-dni`),

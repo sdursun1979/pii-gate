@@ -169,21 +169,58 @@ class PolishPeselTests(unittest.TestCase):
             self.assertEqual(list(d.find_pl_pesel(text)), [], text)
 
 
+class SwedishPersonnummerTests(unittest.TestCase):
+    def test_found_next_to_its_label(self):
+        self.assertEqual(rules(d.find_se_personnummer(f"personnummer: {syn.PNR_A}")), ["se-personnummer"])
+        self.assertEqual(rules(d.find_se_personnummer(f"Personnummer {syn.PNR_A.replace('-', '')}")),
+                         ["se-personnummer"])
+        self.assertEqual(list(d.find_se_personnummer(syn.PNR_A)), [])
+
+    def test_coordination_number_adds_sixty_to_the_day(self):
+        self.assertEqual(rules(d.find_se_personnummer(f"samordningsnummer {syn.SAMORDNING_A}")),
+                         ["se-personnummer"])
+        self.assertEqual(syn.SAMORDNING_A[4:6], "61")
+
+    def test_plus_separator_means_over_one_hundred(self):
+        self.assertEqual(rules(d.find_se_personnummer(f"personnummer {syn.PNR_PLUS}")), ["se-personnummer"])
+        # 29 February 1900 does not exist, 2000 does: valid with "-" only
+        leap = syn.personnummer("000229123")
+        self.assertTrue(d.se_personnummer_valid(leap, "-"))
+        self.assertFalse(d.se_personnummer_valid(leap, "+"))
+
+    def test_bad_luhn_is_ignored(self):
+        broken = syn.PNR_A[:-1] + str((int(syn.PNR_A[-1]) + 1) % 10)
+        self.assertEqual(list(d.find_se_personnummer(f"personnummer {broken}")), [])
+
+    def test_missing_label_is_ignored(self):
+        self.assertEqual(list(d.find_se_personnummer(f"order {syn.PNR_A} shipped")), [])
+
+    def test_invalid_date_is_ignored(self):
+        self.assertEqual(list(d.find_se_personnummer(f"personnummer {syn.PNR_BAD_DATE}")), [])
+        day_zero = syn.personnummer("900100123")
+        self.assertEqual(list(d.find_se_personnummer(f"personnummer {day_zero}")), [])
+        day_sixty = syn.personnummer("900160123")
+        self.assertEqual(list(d.find_se_personnummer(f"samordningsnummer {day_sixty}")), [])
+
+    def test_twelve_digit_form_is_not_matched(self):
+        self.assertEqual(list(d.find_se_personnummer(f"personnummer 19{syn.PNR_A}")), [])
+
+
 class NationalIdEngineTests(unittest.TestCase):
     def test_new_rules_block_by_default_and_can_be_turned_off(self):
         from pii_gate.config import parse
         from pii_gate.engine import Engine
-        text = f"dni {syn.DNI_A} cf {syn.CF_A} bsn {syn.BSN_A} pesel {syn.PESEL_A}"
+        text = f"dni {syn.DNI_A} cf {syn.CF_A} bsn {syn.BSN_A} pesel {syn.PESEL_A} personnummer {syn.PNR_A}"
         rep = Engine().scan_text(text)
-        self.assertEqual(sorted(rep.counts()), ["es-dni", "it-cf", "nl-bsn", "pl-pesel"])
-        off = parse({"rules": {"es-dni": "off", "it-cf": "off", "nl-bsn": "warn", "pl-pesel": "off"}})
+        self.assertEqual(sorted(rep.counts()), ["es-dni", "it-cf", "nl-bsn", "pl-pesel", "se-personnummer"])
+        off = parse({"rules": {"es-dni": "off", "it-cf": "off", "nl-bsn": "warn", "pl-pesel": "off", "se-personnummer": "off"}})
         rep = Engine(off).scan_text(text)
         self.assertFalse(rep.blocked)
         self.assertEqual([f.rule for f in rep.warnings], ["nl-bsn"])
 
     def test_sql_gate_knows_the_new_id_columns(self):
         from pii_gate.engine import Engine
-        for col in ("dni", "nie", "nif", "codice_fiscale", "bsn", "pesel"):
+        for col in ("dni", "nie", "nif", "codice_fiscale", "bsn", "pesel", "personnummer", "samordningsnummer"):
             rep = Engine().scan_text(f"SELECT {col} FROM orders")
             self.assertEqual(list(rep.counts()), ["sql-pii"], col)
 
