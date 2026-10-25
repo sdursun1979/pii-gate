@@ -68,6 +68,47 @@ _CODE_HTTP = re.compile(
     r"|Net\.WebClient|\bUpload(?:String|File|Data|Values)\b|\b(?:Post|Put|Patch|Send)Async\b"
     r"|HttpClient|smtplib|\bsendmail\s*\(", re.I)
 
+# HTTPie (`http`, `https`) and xh (`xh`, `xhs`) send a body with an explicit write method, a form,
+# or a request item read from a file. They are found by command position, not by a regex over the
+# whole line, because "http" and "https" also start every URL. Each segment of the command line is
+# split once, so the check stays linear.
+_HTTPIE_NAMES = ("http", "https", "xh", "xhs")
+_HTTPIE_SEGMENTS = re.compile(r"[|;&\n()`]")
+_HTTPIE_PREFIX = ("sudo", "env", "command", "exec", "time", "nohup")
+_HTTPIE_METHODS = ("post", "put", "patch")
+_HTTPIE_FORM = re.compile(r"--form|--multipart|-[A-Za-z]*f[A-Za-z]*")   # -f is case sensitive: -F follows
+_HTTPIE_FILE_ITEM = re.compile(r"[^\s:=@-][^\s:=@]*(?::=|=)?@\S")         # field@file, field=@file, field:=@file
+
+
+def _httpie_call(command: str) -> Optional[re.Match]:
+    """The HTTPie or xh command word of the first segment that calls one, as a match on `command`."""
+    offset = 0
+    for segment in _HTTPIE_SEGMENTS.split(command):
+        words = segment.split()
+        index = 0
+        while index < len(words) and (
+                words[index].lower() in _HTTPIE_PREFIX or re.match(r"[A-Za-z_]\w*=", words[index])):
+            index += 1
+        if index < len(words):
+            name = re.split(r"[\\/]", words[index])[-1].lower()
+            if name.endswith(".exe"):
+                name = name[:-4]
+            if name in _HTTPIE_NAMES:
+                return re.compile(re.escape(words[index])).search(command, offset)
+        offset += len(segment) + 1
+    return None
+
+
+def _httpie_upload(command: str, call: re.Match) -> bool:
+    """True if the HTTPie or xh call starting at `call` sends a method, a form or a file."""
+    rest = _HTTPIE_SEGMENTS.split(command[call.end():], maxsplit=1)[0]
+    for word in rest.split():
+        if (word.lower() in _HTTPIE_METHODS or word.startswith("<") or _HTTPIE_FORM.fullmatch(word)
+                or _HTTPIE_FILE_ITEM.match(word)):
+            return True
+    return "<" in rest
+
+
 # --------------------------------------------------------------------------- tamper
 # Files that configure the gate or the agents' hooks, and the Python start-up files an agent
 # could use to shadow the gate's own module.
@@ -119,6 +160,11 @@ def find_exfil(command: str, has_sensitive: bool) -> Iterator[Finding]:
     m = _OUTBOUND.search(command)
     if m and (has_sensitive or _UPLOAD_FLAG.search(command)):
         why = "outbound call carrying sensitive data" if has_sensitive else "upload flag"
+        yield Finding("exfil", m.start(), m.end(), mask_cmd(m.group()), f"{m.group().strip()} with {why}")
+        return
+    m = _httpie_call(command)
+    if m and (has_sensitive or _httpie_upload(command, m)):
+        why = "outbound call carrying sensitive data" if has_sensitive else "a method, form or file that sends data"
         yield Finding("exfil", m.start(), m.end(), mask_cmd(m.group()), f"{m.group().strip()} with {why}")
 
 

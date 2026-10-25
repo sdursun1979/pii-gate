@@ -48,7 +48,7 @@ sonra `/hooks` adımını tekrarlayın. Tek bir depoya kurmak için `--project` 
 | `iban`            | engel      | IBAN (mod-97 ve SWIFT kayıt defterindeki ülke uzunluğu)                   |
 | `card`            | engel      | Kart numarası (Luhn; Visa, Mastercard, Amex, Troy, MIR, UnionPay, JCB)     |
 | `secret`          | engel      | Özel anahtarlar; AWS, OpenAI/Anthropic, GitHub, GitLab, Slack, Google, Stripe, npm, PyPI, Hugging Face, SendGrid, Telegram, Azure anahtarları; JWT; URL içindeki ve `Authorization` başlığındaki parolalar |
-| `exfil`           | engel      | Yüklemeler: `curl -d/-F/-T/-X POST`, `scp`, `rsync`, `rclone`, bulut depolama komutları, `gh gist`, posta ve pano komutları, tüneller, `nc`/`ssh`'ye boru, dosyadan ya da alt komuttan beslenen her dış çağrı, kişisel veri taşıyan her dış çağrı; kişisel veri içeren bir dosyayı yayımlamak |
+| `exfil`           | engel      | Yüklemeler: `curl -d/-F/-T/-X POST`, HTTPie ve xh (`POST`/`PUT`/`PATCH`, `--form`, `alan@dosya`, `< dosya`), `scp`, `rsync`, `rclone`, bulut depolama komutları, `gh gist`, posta ve pano komutları, tüneller, `nc`/`ssh`'ye boru, dosyadan ya da alt komuttan beslenen her dış çağrı, kişisel veri taşıyan her dış çağrı; kişisel veri içeren bir dosyayı yayımlamak |
 | `git-push`        | engel      | Ajan yayınlamaz; siz push edersiniz                                       |
 | `tamper`          | engel      | `.pii-gate.json`'a, kanca ayarlarına ve Python başlangıç dosyalarına yazma; `pii-gate uninstall`, `pip install/uninstall pii-gate`; `--no-verify`, `hooks=false`, `PII_GATE_*=` |
 | `read`            | engel      | İçinde engel düzeyinde kişisel veri ya da gizli anahtar bulunan yerel bir dosyayı okumak (`Read`, `read_file`) |
