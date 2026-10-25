@@ -1,7 +1,45 @@
 # Changelog
 
-## Unreleased
+## 0.3.1 (2026-10-25)
 
+Follow-up to an independent audit of 0.3.0 (synthetic data only, all findings reproduced before fixing).
+
+### Fixed
+
+- **Shell rules rewritten around command position.** Every rule now looks at the word in command
+  position of each segment (`|`, `;`, `&&`, newlines, quote-aware) instead of a regex over the whole
+  line. Closes the misses the audit found: glued curl flags (`-Ffile=@x`, `-Tx`, `-H @x`, `--url-query`),
+  network clients fed from a pipe, from `xargs`, from a `while read ... done < file` loop or from a
+  variable assigned earlier in the command, a second HTTPie call after `&&`, piped HTTPie, inline
+  interpreter code that opens a socket or calls `urlopen`/`httpx`/`fetch`, PowerShell backtick and
+  `${var}` obfuscation, `bitsadmin /upload`, `pscp`, `aws s3api upload-part`, `aws sns publish`,
+  `tailscale funnel`. Also removes the false positives the old regexes produced (`grep HttpClient`,
+  `dotnet test --filter PostAsync`, commit messages mentioning `clip` or `ssh`, `curl -d` to `localhost`).
+- **Quadratic patterns** (`[^|&;]*` in the exfil and bypass rules, the prose check in the SQL gate) made a
+  30 to 100 KB command or text take 2 to 25 seconds, enough to hit the agents' timeout. All linear now.
+- **Tamper rule.** A multi-line command whose first line was read-only (`cat x\ncp y .pii-gate.json`),
+  `git diff --output=.pii-gate.json`, shell globs (`.pii-g*.json`), string concatenation in inline
+  Python, `pip -q uninstall`, `installer.uninstall()`, `.git/hooks/` and `.pre-commit-config.yaml`
+  are caught. `tamper_path` strips NTFS tails (`.pii-gate.json.`, `::$DATA`), matches a relative
+  `.claude.json`, and compares the project root case-insensitively.
+- **Untrusted project config** could still disable the gate with `allow_paths: ["*"]`,
+  `sql.ignore_columns`, `allow_values` or `email_allow_domains`; those now need the home file.
+- **Paths.** Relative paths in read/write/send tools are resolved against the agent's cwd before the
+  `allow_paths` check (a relative `tests/x` from outside the project no longer matches); Gemini's
+  `read_many_files` (`paths` list) is covered.
+- SQL written into a source file by a write tool is a warning instead of a block (it is blocked when a
+  shell or MCP tool runs it), so a web app's user-listing query can still be written.
+- `pii-gate install` no longer prints a misleading console-script warning; the threat model describes
+  the actual launch (`python -P -m pii_gate`).
+
+### Added
+
+- Detectors: a leading number, date or code no longer hides a card or an IBAN; card groups must be
+  4+ then 2+ digits (no more OID/version/decimal false positives); TCKN with dashes; Swedish
+  personnummer in the 12-digit form; Belgian number in space groups; Stripe webhook secrets; AWS
+  secret keys with alignment spaces; `TABLE <person table>` is `sql-star`; select lists run across
+  blank lines, quoted aliases do not count as prose, `SELECT"col"` is SQL. The Spanish DNI no
+  longer accepts a space before the check letter (1-in-23 false positive on any 8-digit number).
 - **HTTPie and xh uploads** (`http`/`https`/`xh`/`xhs` with `POST`/`PUT`/`PATCH`, `--form`, a request item
   read from a file or `< file`) are `exfil` findings; the command is located by command position, not by a
   regex over the line, because `http` also starts every URL. Contributed by arxigen (#8).

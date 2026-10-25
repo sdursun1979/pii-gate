@@ -39,7 +39,10 @@ class ParseTests(unittest.TestCase):
         self.assertIn("protocol_no", cfg.sql_extra_columns)
         for loosening in ({"rules": {"tckn": "warn"}}, {"rules": {"git-push": "off"}}, {"fail_open": True},
                           {"scan_prompts": False}, {"log": False}, {"allow_paths": ["/*"]},
-                          {"allow_paths": ["C:/*"]}, {"allow_paths": ["../*"]}, {"allow_paths": ["~/*"]}):
+                          {"allow_paths": ["C:/*"]}, {"allow_paths": ["../*"]}, {"allow_paths": ["~/*"]},
+                          {"allow_paths": ["*"]}, {"allow_paths": ["*.csv"]}, {"allow_paths": ["**/*.json"]},
+                          {"allow_values": ["12345678950"]}, {"email_allow_domains": ["x.example"]},
+                          {"sql": {"ignore_columns": ["tckn"]}}):
             with self.assertRaises(config.ConfigError, msg=loosening):
                 config.apply(config.Config(), loosening, "p", trusted=False)
 

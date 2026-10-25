@@ -109,6 +109,8 @@ RRN_DOTTED = f"{RRN_A[0:2]}.{RRN_A[2:4]}.{RRN_A[4:6]}-{RRN_A[6:9]}.{RRN_A[9:]}"
 RRN_2000 = be_rrn("050101123", born_2000_or_later=True)   # 1 January 2005
 RRN_BIS = be_rrn("902101123")                    # bis number: month + 20
 RRN_BAD_DATE = be_rrn("901301123")               # month 13
+RRN_SPACED = " ".join((RRN_A[0:2], RRN_A[2:4], RRN_A[4:6], RRN_A[6:9], RRN_A[9:]))   # YY MM DD SSS CC
+PNR_12 = "19" + PNR_A                            # twelve-digit form YYYYMMDD-NNNC
 
 
 # --------------------------------------------------------------------------- formatting helpers
@@ -137,6 +139,7 @@ CARD_AMEX = card("37123456789012")
 # Token-shaped strings in the published formats, filled with arbitrary characters. None is a real key.
 SYN_PASSWORD = "S3cretPassw0rd"
 STRIPE_KEY = "sk_live_" + "Zq7Wm2Lp9Xr4Tn6V"
+STRIPE_WEBHOOK_SECRET = "whsec_" + "Zq7Wm2Lp9Xr4Tn6Vb8Kc3Jd5Hf1Gs0Ay"
 GITLAB_TOKEN = "glpat-" + "Zq7Wm2Lp9Xr4Tn6Vb8Kc"
 NPM_TOKEN = "npm_" + "Zq7Wm2Lp9Xr4Tn6Vb8Kc3Jd5Hf1Gs0Ay2Bx4Cw"
 HF_TOKEN = "hf_" + "Zq7Wm2Lp9Xr4Tn6Vb8Kc3Jd5Hf1Gs0Ay2"

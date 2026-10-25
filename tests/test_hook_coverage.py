@@ -153,6 +153,48 @@ class CoverageTests(unittest.TestCase):
         self.assertNotIn(b"\r\r", raw)
 
 
+class AuditFollowUpTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = self.tmp.name
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_gemini_read_many_files_paths_key(self):
+        data = Path(self.home, "patients.csv")
+        data.write_text(syn.TCKN_A + "\n", encoding="utf-8")
+        payload = json.dumps({"hook_event_name": "BeforeTool", "timestamp": "t", "cwd": self.home,
+                              "tool_name": "read_many_files", "tool_input": {"paths": ["patients.csv"]}})
+        self.assertEqual(hook.run(payload, cfg=Config(), home=self.home).exit_code, 2)
+
+    def test_relative_path_outside_the_project_is_not_allow_listed(self):
+        outside = Path(self.home, "outside", "tests")
+        outside.mkdir(parents=True)
+        Path(outside, "leak.csv").write_text(syn.TCKN_A, encoding="utf-8")
+        cfg = parse({"allow_paths": ["tests/*"]})
+        cfg.project_root = str(Path(self.home, "project"))
+        payload = claude("Read", {"file_path": "tests/leak.csv"}, cwd=str(Path(self.home, "outside")))
+        self.assertEqual(hook.run(payload, cfg=cfg, home=self.home).exit_code, 2)
+        inside = Path(self.home, "project", "tests")
+        inside.mkdir(parents=True)
+        Path(inside, "fx.csv").write_text(syn.TCKN_A, encoding="utf-8")
+        payload = claude("Read", {"file_path": "tests/fx.csv"}, cwd=str(Path(self.home, "project")))
+        self.assertEqual(hook.run(payload, cfg=cfg, home=self.home).exit_code, 0)
+
+    def test_sql_written_into_source_is_a_warning_not_a_block(self):
+        out = hook.run(claude("Write", {"file_path": "/work/repo.py",
+                                        "content": 'q = "SELECT id, name, email FROM users WHERE id = $1"'}),
+                       cfg=Config(), home=self.home)
+        self.assertEqual(out.exit_code, 0)
+        out = hook.run(claude("Bash", {"command": "psql -c \"SELECT id, name, email FROM users\""}),
+                       cfg=Config(), home=self.home)
+        self.assertEqual(out.exit_code, 2)
+        out = hook.run(claude("Write", {"file_path": "/work/repo.py", "content": f"ID = '{syn.TCKN_A}'"}),
+                       cfg=Config(), home=self.home)
+        self.assertEqual(out.exit_code, 2)
+
+
 class EncodingTests(unittest.TestCase):
     def test_non_utf8_stdin_and_non_ascii_reason_do_not_crash(self):
         with tempfile.TemporaryDirectory() as tmp:

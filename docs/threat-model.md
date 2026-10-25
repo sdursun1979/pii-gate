@@ -38,7 +38,7 @@ names, counts and a masked first character.
    `cat file` in a shell, a `Grep` result, a database query result returned by an MCP server, or a
    file attached with `@` in Claude Code are not inspected before they reach the model. Control that
    side with least-privilege database accounts, masked views and the agents' own permission settings.
-2. **It is pattern based.** It finds identifiers with a checksum (TR, ES, IT, NL, PL, SE), IBANs, cards,
+2. **It is pattern based.** It finds identifiers with a checksum (TR, ES, IT, NL, PL, SE, BE), IBANs, cards,
    known secret formats and heuristic e-mail and phone numbers. It does not find a name, an address or
    a diagnosis written in free text. The SQL rules match column and table names; a view with renamed
    columns passes.
@@ -62,8 +62,9 @@ names, counts and a masked first character.
    downgrading the package. It does not stop you. It also cannot stop an instruction in `CLAUDE.md`,
    `AGENTS.md` or a prompt that tells the agent to work around the gate; the gate then sees and judges
    whatever the agent tries next.
-6. **Allow-listed paths are not scanned.** `allow_paths` exempts writes to and reads of matching
-   files inside the project. Keep the patterns narrow (`tests/fixtures/*`, not `*`).
+6. **Allow-listed paths are not scanned.** `allow_paths` exempts local writes to, reads of, and
+   publishing of matching files inside the project. Keep the patterns narrow (`tests/fixtures/*`);
+   a project file may not use a bare `*`, an absolute path or `..`.
 7. **Blocked prompts stay in local history.** The agents keep prompt history and transcripts on disk.
    pii-gate asks Claude Code not to echo the blocked prompt back (`suppressOriginalPrompt`), but it
    cannot delete what the agent has already stored.
@@ -75,9 +76,10 @@ names, counts and a masked first character.
 A project's `.pii-gate.json` travels with the repository, and the agent may have cloned that
 repository a minute ago. A project file may therefore only tighten the gate: raise a rule's level,
 add allow-listed values, allow paths inside the project, add sensitive columns and person tables.
-Lowering a level, `fail_open`, `scan_prompts`, `log`, absolute or `..` allow-path patterns are
-accepted only from `~/.pii-gate.json` or the file named by `PII_GATE_CONFIG`, or from a project file
-when the home file says `"trust_project_config": true`. A project file that tries to loosen the gate
+Lowering a level, `fail_open`, `scan_prompts`, `log`, `allow_values`, `email_allow_domains`,
+`sql.ignore_columns`, and allow-path patterns that are absolute, contain `..` or start with a
+wildcard are accepted only from `~/.pii-gate.json` or the file named by `PII_GATE_CONFIG`, or from a
+project file when the home file says `"trust_project_config": true`. A project file that tries to loosen the gate
 is a config error, and a config error blocks every call until it is fixed.
 
 The project file is looked up at the project root (`CLAUDE_PROJECT_DIR` / `GEMINI_PROJECT_DIR`, else
@@ -86,9 +88,9 @@ subdirectory the agent has changed into.
 
 ## How the gate protects itself
 
-- The hook runs through the installed `pii-gate` console script, so a `pii_gate/` folder or a
-  `json.py` written into the project is never imported instead of the real code. Where no console
-  script is found, the interpreter is started with the working directory removed from `sys.path`.
+- The hook is started with the working directory removed from `sys.path` (`python -P -m pii_gate`
+  on 3.11+, a one-liner that pops it on older versions), so a `pii_gate/` folder or a `json.py`
+  written into the project is never imported instead of the real code.
 - Writes to `.pii-gate.json`, the agents' hook and settings files, `pii_gate/` or `pii_gate.py` at the
   project root, `sitecustomize.py`, `usercustomize.py` and `.pth` files in site-packages are `tamper`
   findings, through any tool.

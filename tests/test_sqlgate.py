@@ -40,6 +40,29 @@ class StarTests(unittest.TestCase):
         self.assertEqual(run("SELECT * FROM orders"), ([], []))
 
 
+class TableStatementTests(unittest.TestCase):
+    def test_table_statement_on_a_person_table(self):
+        for sql in ("TABLE patients;", "table patients", "TABLE ONLY patients;", "TABLE public.patients ORDER BY id LIMIT 5;",
+                    'psql -c "TABLE patients"', "psql -c 'TABLE patients'", "SELECT id FROM visits UNION TABLE patients;",
+                    "SELECT * FROM (TABLE patients) p;", "-- dump\nTABLE patients;", "x = 1; TABLE users;"):
+            self.assertEqual(run(sql), (["sql-star"], []), sql)
+            self.assertTrue(sqlgate.looks_like_sql(sql), sql)
+
+    def test_ddl_other_tables_and_prose(self):
+        for sql in ("TABLE orders;", "CREATE TABLE patients (id int);", "CREATE TEMP TABLE patients (id int);",
+                    "DROP TABLE patients;", "DROP TABLE IF EXISTS patients;", "DROP\nTABLE patients;",
+                    "ALTER TABLE patients ADD x int;", "LOCK TABLE patients;", "LOCK TABLE ONLY patients;",
+                    "TRUNCATE TABLE patients;", "RENAME TABLE patients TO p2;", "INSERT INTO archive TABLE patients;",
+                    "Look at the table patients;", "The table users has many rows.", "Table users\nholds people."):
+            self.assertEqual(run(sql), ([], []), sql)
+
+    def test_is_linear(self):
+        t0 = time.perf_counter()
+        for text in ("TABLE " * 100000, "table patients " * 50000, "table patients;" * 20000):
+            list(sqlgate.find_sql(text))
+        self.assertLess(time.perf_counter() - t0, 1.0)
+
+
 class WrapperTests(unittest.TestCase):
     def test_non_revealing_wrappers_pass(self):
         sql = ("SELECT COUNT(national_id), COUNT(DISTINCT email), LEN(phone), LEFT(first_name, 1), "
@@ -117,6 +140,21 @@ class FromInsideFunctionTests(unittest.TestCase):
         self.assertEqual(run("SELECT COUNT(*), EXTRACT(MONTH FROM visit_date), p.national_id FROM patients p"),
                          (["sql-pii"], []))
 
+    def test_one_level_of_nested_parentheses(self):
+        for sql in ("SELECT SUBSTRING(COALESCE(code, 'x') FROM 1 FOR 3), national_id FROM patients",
+                    "SELECT TRIM(LEADING '0' FROM COALESCE(code, '')), national_id FROM patients",
+                    "SELECT EXTRACT(YEAR FROM COALESCE(visit_date, NOW())), national_id FROM patients"):
+            self.assertEqual(run(sql), (["sql-pii"], []), sql)
+        self.assertEqual(run("SELECT EXTRACT(YEAR FROM COALESCE(visit_date, NOW())), id FROM visits"), ([], []))
+        self.assertEqual(run("SELECT SUBSTRING(COALESCE(code, 'x') FROM 1 FOR 3) FROM visits"), ([], []))
+
+    def test_is_linear(self):
+        t0 = time.perf_counter()
+        for text in ("select " + "SUBSTRING(COALESCE(" * 20000 + " from t", "select substring(" + "(x)" * 60000 + " from t",
+                     "select extract(" + "x " * 100000 + " from t"):
+            list(sqlgate.find_sql(text))
+        self.assertLess(time.perf_counter() - t0, 1.0)
+
 
 class IdentifierPartTests(unittest.TestCase):
     def test_camel_case_brackets_and_turkish_letters(self):
@@ -188,7 +226,7 @@ class OutputListAndExportTests(unittest.TestCase):
         for text in ("INSERT INTO t VALUES (1) RETURNING id", "UPDATE t SET a = 1 OUTPUT deleted.a",
                      "COPY patients TO STDOUT", "bcp dbo.patients out p.dat"):
             self.assertTrue(sqlgate.looks_like_sql(text), text)
-        for text in ("returning customers", "the output is fine", "please select one"):
+        for text in ("returning customers", "the output is fine", "please select one", "the table users has rows"):
             self.assertFalse(sqlgate.looks_like_sql(text), text)
 
 
@@ -241,6 +279,55 @@ class ProseTests(unittest.TestCase):
 
     def test_paragraph_break_ends_a_list(self):
         self.assertEqual(run("select one option\n\nsalary and national_id are listed from the table"), ([], []))
+        self.assertEqual(run("## Select lists\n\nColumns such as salary are blocked from now on."), ([], []))
+
+    def test_blank_lines_inside_a_select_list(self):
+        for sql in ("SELECT id,\n\n       national_id, tckn, salary\nFROM patients",
+                    "SELECT id\n\n     , national_id\nFROM visits",
+                    "SELECT\n\n    national_id\nFROM visits",
+                    "SELECT DISTINCT\n\n    national_id\nFROM visits",
+                    "SELECT\n    p.id,\n\n    -- identity\n    p.national_id\n\nFROM patients p",
+                    "SELECT id, /* a\n\n b */ national_id FROM visits",
+                    "SELECT 'a\n\nb' AS note, national_id FROM visits"):
+            self.assertEqual(run(sql)[0], ["sql-pii"], sql)
+
+    def test_quote_right_after_select(self):
+        for sql in ('SELECT"national_id" FROM patients', "SELECT`national_id` FROM patients",
+                    "SELECT[national_id] FROM patients", "SELECT'x' AS a, national_id FROM visits"):
+            self.assertEqual(run(sql)[0], ["sql-pii"], sql)
+        for text in ('The "SELECT" salary list comes from the docs.', "The `SELECT` salary list comes from the docs."):
+            self.assertEqual(run(text), ([], []), text)
+
+    def test_quoted_aliases_do_not_read_as_prose(self):
+        for sql in ('SELECT national_id AS "date of birth", salary AS "paid to employee" FROM patients',
+                    "SELECT national_id AS `date of birth`, salary AS `paid to employee` FROM patients",
+                    "SELECT national_id AS [date of birth], salary AS [paid to employee] FROM patients",
+                    "SELECT national_id AS 'date of birth', salary AS 'paid to the employee' FROM patients"):
+            self.assertEqual(run(sql)[0], ["sql-pii"], sql)
+        for text in ('print("Please select the salary of an employee from the menu")',
+                     'msg = "You can select the salary of a person from the list"'):
+            self.assertEqual(run(text), ([], []), text)
+
+    def test_many_selects_before_one_far_from_are_linear(self):
+        # Every SELECT here reads as prose up to the same FROM; each used to rescan the whole window
+        # (15 blocks took ~25 s). The prose verdict now costs a binary search.
+        t0 = time.perf_counter()
+        list(sqlgate.find_sql((("select " * 2500) + "the a from t\n\n") * 15))         # 263 KB
+        self.assertLess(time.perf_counter() - t0, 1.0)
+
+    def test_select_runs_are_linear(self):
+        t0 = time.perf_counter()
+        for text in ("select " * 20000, "select " * 20000 + "from t", "select the " * 20000 + "from t",
+                     "select\n\n" * 20000 + "from t"):
+            list(sqlgate.find_sql(text))
+        self.assertLess(time.perf_counter() - t0, 1.0)
+
+    def test_paragraph_breaks_and_quoted_names_are_linear(self):
+        t0 = time.perf_counter()
+        for text in ("select a,\n\n" * 5000 + "from t", "select a, " + " " * 300000 + "\n\nfrom t",
+                     "select a\n" + "\n" * 300000 + "from t", 'select a as "x of y", ' * 5000 + "from t"):
+            list(sqlgate.find_sql(text))
+        self.assertLess(time.perf_counter() - t0, 1.0)
 
     def test_real_queries_still_block(self):
         for sql in ("SELECT national_id FROM patients",

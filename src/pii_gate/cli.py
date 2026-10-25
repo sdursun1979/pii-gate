@@ -233,10 +233,6 @@ def cmd_scan(args) -> int:
 
 def cmd_install(args) -> int:
     agents = list(installer.AGENTS) if args.agent == "all" else [args.agent]
-    program, prog_args = installer.hook_program()
-    if prog_args and prog_args[0] != "hook":
-        _print("warning: the pii-gate console script was not found next to the interpreter; "
-               "falling back to python -m with the working directory kept off sys.path")
     for agent in agents:
         path = installer.install(agent, project=args.project)
         _print(f"{agent}: hook written to {path}")

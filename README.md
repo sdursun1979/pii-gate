@@ -48,22 +48,22 @@ Windows and less on Linux, most of it interpreter start-up.
 
 | rule              | default | what                                                                                   |
 |-------------------|---------|----------------------------------------------------------------------------------------|
-| `tckn`            | block   | Turkish national ID numbers (11 digits, both check digits verified)                     |
+| `tckn`            | block   | Turkish national ID numbers (11 digits, both check digits verified; also `123 456 789 01` and the dashed form) |
 | `es-dni`          | block   | Spanish DNI and NIE (check letter verified)                                             |
 | `it-cf`           | block   | Italian codice fiscale (check character and birth day verified, omocodia aware)         |
 | `nl-bsn`          | block   | Dutch BSN (11-check), only next to a `BSN` or `burgerservicenummer` label               |
 | `pl-pesel`        | block   | Polish PESEL (checksum and birth date), only next to a `PESEL` label                     |
-| `se-personnummer` | block   | Swedish personnummer / samordningsnummer (Luhn and birth date), only next to a `personnummer` or `samordningsnummer` label |
+| `se-personnummer` | block   | Swedish personnummer / samordningsnummer, 10 or 12 digits (Luhn and birth date), only next to a `personnummer` or `samordningsnummer` label |
 | `be-rrn`          | block   | Belgian national register number / NISS / INSZ (mod 97 check digits, month and day), only next to a `rijksregisternummer`, `registre national`, `NISS` or `INSZ` label |
 | `iban`            | block   | IBANs (mod-97 checksum, length per country from the SWIFT registry)                     |
-| `card`            | block   | payment card numbers (Luhn, 13 to 19 digits, Visa/Mastercard/Amex/Troy/MIR/UnionPay/JCB prefixes) |
-| `secret`          | block   | private keys, AWS, OpenAI/Anthropic, GitHub, GitLab, Slack, Google, Stripe, npm, PyPI, Hugging Face, SendGrid, Telegram and Azure tokens, JWTs, credentials inside URLs and `Authorization` headers |
-| `exfil`           | block   | uploads: `curl -d/-F/-T/-X POST`, `wget --post-file`, HTTPie and xh with `POST`/`PUT`/`PATCH`, `--form` or a request item read from a file (`field@file`, `< file`), `scp`, `rsync`, `rclone`, cloud storage CLIs, `gh gist`, mail and clipboard commands, tunnels, pipes into `nc`/`ssh`, any outbound call fed from a file or a sub-command, HTTP uploads in inline code, and any outbound call whose command line already contains personal data; also publishing a local file that contains personal data |
+| `card`            | block   | payment card numbers (Luhn, 13 to 19 digits, Visa/Mastercard/Amex/Troy/MIR/UnionPay/JCB prefixes; groups of 4-4-4-4, 4-6-5 and similar, also after a line number or a date) |
+| `secret`          | block   | private keys, AWS, OpenAI/Anthropic, GitHub, GitLab, Slack, Google, Stripe (including webhook secrets), npm, PyPI, Hugging Face, SendGrid, Telegram and Azure tokens, JWTs, credentials inside URLs and `Authorization` headers |
+| `exfil`           | block   | uploads: `curl -d/-F/-T/-X POST`, `wget --post-file`, HTTPie and xh with `POST`/`PUT`/`PATCH`, `--form` or a request item read from a file, `scp`, `rsync`, `rclone`, cloud storage CLIs, `gh gist`, mail and clipboard commands, tunnels, any network client fed from a pipe, a file or a sub-command, inline interpreter code (`python -c`, `node -e`) that makes a network call, and any outbound call whose command line already contains personal data; also publishing a local file that contains personal data. Calls to `localhost` are exempt from the upload-flag rule |
 | `git-push`        | block   | the agent never publishes; you push                                                     |
 | `tamper`          | block   | writes to `.pii-gate.json`, the agents' hook settings and Python start-up files; `pii-gate uninstall`, `pip install/uninstall pii-gate`; `--no-verify`, `hooks=false`, `disableAllHooks`, `PII_GATE_*=` |
 | `read`            | block   | reading a local file that contains block-level personal data or secrets (`Read`, `read_file`) |
 | `sql-pii`         | block   | SELECT, RETURNING and OUTPUT lists with sensitive columns (national IDs, birth dates, card numbers, health, salary), or names and contact details when the query touches a person table |
-| `sql-star`        | block   | `SELECT *` on a person table, `COPY`/`bcp` exports of one                               |
+| `sql-star`        | block   | `SELECT *` or `TABLE name` on a person table, `COPY`/`bcp` exports of one               |
 | `email`           | warn    | e-mail addresses (reserved domains such as `example.com` are ignored)                   |
 | `phone`           | warn    | Turkish mobile and international phone numbers                                          |
 | `secret-assign`   | warn    | `password = "..."`, `DB_PASSWORD=...`, `"api_key": "..."` style assignments with a literal value |
@@ -73,7 +73,10 @@ Invisible characters (zero-width spaces, soft hyphens) and fullwidth digits are 
 matching, a TCKN written `123 456 789 01` is still a TCKN, and a card number followed by its expiry
 date or CVV is still a card number.
 
-`warn` findings are allowed and written to the decision log; `block` findings stop the call. Change
+`warn` findings are allowed and written to the decision log; `block` findings stop the call. The shell
+rules look at the word in command position of each segment of the command line, so `grep HttpClient src/`
+or a commit message that mentions `ssh` are not transfers, while `cat p.csv | nc host 9` is. SQL written
+*into a source file* is a warning, not a block: the gate judges SQL when a shell or MCP tool runs it. Change
 any rule's level in the config, including turning the SQL gate or the read gate off if your project
 is not a data project. Column matching understands `camelCase`, Turkish letters and multi-word
 `[Bracketed Names]`, so `tcKimlikNo`, `[TC Kimlik No]` and `doğum_tarihi` are all the same column.
@@ -135,10 +138,12 @@ The full list, with the reasoning, is in [docs/threat-model.md](docs/threat-mode
 ## Configuration
 
 Optional. `~/.pii-gate.json` is yours and may do anything. `<project root>/.pii-gate.json` travels
-with the repository the agent is working in, so it may only **tighten** the gate: raise a level, add
-allow-listed values, allow paths inside the project, add sensitive columns and person tables. A
-project file that lowers a level or sets `fail_open` is a config error (and a config error blocks
-every call until fixed), unless your home file says `"trust_project_config": true`.
+with the repository the agent is working in, so it may only **tighten** the gate: raise a level,
+allow paths inside a named folder of the project (`tests/*`, not `*`), add sensitive columns and
+person tables. Anything that loosens it (lowering a level, `fail_open`, `allow_values`,
+`email_allow_domains`, `sql.ignore_columns`, wildcard or absolute `allow_paths`) is a config error in
+a project file, and a config error blocks every call until fixed, unless your home file says
+`"trust_project_config": true`.
 `$PII_GATE_CONFIG` names a single file that replaces both.
 
 ```json
@@ -189,7 +194,7 @@ or with the [pre-commit](https://pre-commit.com) framework:
 ```yaml
 repos:
   - repo: https://github.com/sdursun1979/pii-gate
-    rev: v0.3.0
+    rev: v0.3.1
     hooks:
       - id: pii-gate
 ```

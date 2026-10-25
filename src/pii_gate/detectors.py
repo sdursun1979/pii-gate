@@ -10,7 +10,7 @@ import bisect
 import re
 from dataclasses import dataclass, replace
 from datetime import date
-from typing import Iterable, Iterator, List
+from typing import Iterable, Iterator, List, Tuple
 
 
 @dataclass(frozen=True)
@@ -38,6 +38,8 @@ WELL_KNOWN_TEST_VALUES = frozenset({
     "RSSMRA85T10A562S",                  # the widely published codice fiscale example
     "123456782", "111222333",            # widely published Dutch BSN examples
     "44051401359",                       # the widely published PESEL example
+    "MRTMTT25D09F205Z",                  # a codice fiscale worked example from public documentation
+    "85073003328", "17073003384",        # the Belgian register number worked examples (fr.wikipedia)
 })
 
 # RFC 2606 / RFC 6761 reserved names plus GitHub's no-reply relay.
@@ -88,9 +90,9 @@ def _original_offsets(findings: Iterable[Finding], dropped: List[int]) -> Iterat
 
 # --------------------------------------------------------------------------- TCKN
 _TCKN = re.compile(r"\d(?<!\d\d)\d{10}(?!\d)")
-# Written in groups: 123 456 789 01 or 123.456.789.01, one separator throughout. Phone numbers do not
-# take this shape (Turkish ones are 10 digits, or 11 with a leading 0, grouped 3-3-2-2 / 4-3-2-2).
-_TCKN_GROUPED = re.compile(r"[1-9](?<![\w+.,-][1-9])(?<!\d[ .][1-9])\d\d([ .])\d{3}\1\d{3}\1\d\d(?![\w-])(?![ .,]\d)")
+# Written in groups: 123 456 789 01, 123.456.789.01 or 123-456-789-01, one separator throughout. Phone
+# numbers do not take this shape (Turkish ones are 10 digits, or 11 with a leading 0, grouped 3-3-2-2 / 4-3-2-2).
+_TCKN_GROUPED = re.compile(r"[1-9](?<![\w+.,-][1-9])(?<!\d[ .-][1-9])\d\d([ .-])\d{3}\1\d{3}\1\d\d(?![\w-])(?![ .,]\d)")
 
 
 def tckn_valid(s: str) -> bool:
@@ -119,8 +121,13 @@ def find_tckn(text: str, allow: Iterable[str] = ()) -> Iterator[Finding]:
 
 
 # --------------------------------------------------------------------------- other national IDs
+# A DNI takes its check letter directly or after a hyphen, not after a space: any 8-digit number followed
+# by a capital ("48573920 V bytes") would pass one time in 23. A NIE starts with its own letter, so its
+# spaced form ("X 1234567 L") stays.
+# (A leading lookahead on the first character, here and below, lets the regex engine skip most positions.)
 _DNI = re.compile(
-    r"(?P<num>\d(?<![A-Za-z0-9]\d)\d{7}|[XYZ](?<![A-Za-z0-9][XYZ])[- ]?\d{7})[- ]?(?P<letter>[A-Z])(?![A-Za-z0-9])"
+    r"(?=[\dXYZ])(?:(?P<dni>\d(?<![A-Za-z0-9]\d)\d{7})-?|(?P<nie>[XYZ](?<![A-Za-z0-9][XYZ])[- ]?\d{7})[- ]?)"
+    r"(?P<letter>[A-Z])(?![A-Za-z0-9])"
 )
 _DNI_LETTERS = "TRWAGMYFPDXBNJZSQVHLCKE"
 
@@ -135,7 +142,7 @@ def es_id_valid(num: str, letter: str) -> bool:
 
 def find_es_id(text: str, allow: Iterable[str] = ()) -> Iterator[Finding]:
     for m in _DNI.finditer(text):
-        num = m.group("num").replace("-", "").replace(" ", "")
+        num = (m.group("dni") or m.group("nie")).replace("-", "").replace(" ", "")
         compact = num + m.group("letter")
         if compact in WELL_KNOWN_TEST_VALUES or compact in allow or m.group() in allow:
             continue
@@ -183,9 +190,12 @@ _BSN = re.compile(r"\d(?<!\d\d)\d{8}(?!\d)")
 _BSN_LABEL = re.compile(r"(?i)\b(?:bsn|burgerservicenummer|sofi(?:nummer)?)\b")
 _PESEL = re.compile(r"\d(?<!\d\d)\d{10}(?!\d)")
 _PESEL_LABEL = re.compile(r"(?i)\bpesel\b")
-_SE_PNR = re.compile(r"(?<!\d)(\d{6})([-+]?)(\d{4})(?!\d)")
+_SE_PNR = re.compile(r"(?=\d)(?<!\d)(19|20)?(\d{6})([-+]?)(\d{4})(?!\d)")       # YYMMDD-NNNC, YYYYMMDD-NNNC
 _SE_PNR_LABEL = re.compile(r"(?i)\b(?:personnummer|samordningsnummer)\b")
-_BE_RRN = re.compile(r"(?<!\d)\d{2}\.?\d{2}\.?\d{2}[-.]?\d{3}\.?\d{2}(?!\d)")
+# YYMMDD SSS CC: compact, dotted (90.01.01-123.95) or in space groups (90 01 01 123 95). A spaced run that
+# goes on with more digit groups is part of something else.
+_BE_RRN = re.compile(r"(?=\d)(?<!\d)(?:\d{2}\.?\d{2}\.?\d{2}[-.]?\d{3}\.?\d{2}"
+                     r"|(?<!\d )\d\d \d\d \d\d \d{3} \d\d(?! \d))(?!\d)")
 _BE_RRN_LABEL = re.compile(
     r"(?i)\b(?:rijksregisternummer|rijksregister|registre\s+national|niss|insz|national\s+register\s+number)\b")
 
@@ -236,23 +246,30 @@ def find_pl_pesel(text: str, allow: Iterable[str] = ()) -> Iterator[Finding]:
             yield Finding("pl-pesel", m.start(), m.end(), mask(s), "Polish PESEL next to its label, checksum valid")
 
 
-def se_personnummer_valid(s: str, sep: str = "-") -> bool:
+def se_personnummer_valid(s: str, sep: str = "-", century: str = "") -> bool:
     """Swedish personnummer / samordningsnummer: YYMMDD, separator, NNNC, Luhn over the nine digits before C.
 
     A coordination number adds 60 to the day. The two-digit year leaves the century open: "-" means the
     person is under 100 (this or the previous century), "+" means 100 or older (previous centuries).
+    The twelve-digit form YYYYMMDD-NNNC writes the century (19 or 20) in front; `s` is still the last ten
+    digits, which carry the Luhn digit.
     """
     if len(s) != 10 or not s.isdigit() or sep not in ("", "-", "+") or len(set(s)) == 1:
+        return False
+    if century and (century not in ("19", "20") or sep == "+"):
         return False
     if not luhn_valid(s):
         return False
     yy, mm, dd = int(s[0:2]), int(s[2:4]), int(s[4:6])
     if dd > 60:
         dd -= 60
-    centuries = (1800, 1900) if sep == "+" else (1900, 2000)
-    for century in centuries:
+    if century:
+        bases: Tuple[int, ...] = (int(century) * 100,)
+    else:
+        bases = (1800, 1900) if sep == "+" else (1900, 2000)
+    for base in bases:
         try:
-            date(century + yy, mm, dd)
+            date(base + yy, mm, dd)
             return True
         except ValueError:
             continue
@@ -277,8 +294,8 @@ def be_rrn_valid(s: str) -> bool:
 
 def find_be_rrn(text: str, allow: Iterable[str] = ()) -> Iterator[Finding]:
     for m in _BE_RRN.finditer(text):
-        s = m.group().replace(".", "").replace("-", "")
-        if m.group() in allow or s in allow or not be_rrn_valid(s):
+        s = m.group().replace(".", "").replace("-", "").replace(" ", "")
+        if s in WELL_KNOWN_TEST_VALUES or m.group() in allow or s in allow or not be_rrn_valid(s):
             continue
         if _labelled(_BE_RRN_LABEL, text, m.start()):
             yield Finding("be-rrn", m.start(), m.end(), mask(m.group()),
@@ -287,8 +304,8 @@ def find_be_rrn(text: str, allow: Iterable[str] = ()) -> Iterator[Finding]:
 
 def find_se_personnummer(text: str, allow: Iterable[str] = ()) -> Iterator[Finding]:
     for m in _SE_PNR.finditer(text):
-        s = m.group(1) + m.group(3)
-        if m.group() in allow or s in allow or not se_personnummer_valid(s, m.group(2)):
+        s = m.group(2) + m.group(4)
+        if m.group() in allow or s in allow or not se_personnummer_valid(s, m.group(3), m.group(1) or ""):
             continue
         if _labelled(_SE_PNR_LABEL, text, m.start()):
             yield Finding("se-personnummer", m.start(), m.end(), mask(m.group()),
@@ -326,29 +343,71 @@ def iban_valid(compact: str) -> bool:
     return int(number) % 97 == 1
 
 
+class _Runs:
+    """Where to search next after a card or IBAN candidate fails.
+
+    A candidate is a greedy run of separated groups, so a number written just before the value
+    ("2026-10-25 4539 ...", "AB12 TR28 ...") becomes the start of the candidate and spoils it. A failed
+    candidate is therefore retried from its next group: at most _RETRIES times, and only while the part
+    dropped is short (less than _LEADING characters from where the run of groups began). Further into a
+    long run the search goes on after the candidate as before, so no run costs more than _RETRIES extra
+    candidates, however long it is.
+    """
+
+    __slots__ = ("text", "seps", "lead_end", "retries", "examined")
+
+    def __init__(self, text: str, seps: str):
+        self.text, self.seps = text, seps
+        self.lead_end = self.retries = 0
+        self.examined = -2          # end of the last failed candidate
+
+    def begin(self, start: int) -> None:
+        """Called for every candidate. One that does not continue the failed run starts a new run."""
+        e = self.examined
+        if not (start < e or (start == e + 1 and self.text[e] in self.seps)):
+            self.lead_end, self.retries = start + _LEADING, _RETRIES
+
+    def failed(self, start: int, end: int, jump: int) -> int:
+        self.examined = end
+        if self.retries and start < self.lead_end:
+            self.retries -= 1
+            return start + 1
+        return jump
+
+    def found(self) -> None:
+        self.examined = -2
+
+
+_LEADING = 16                  # "2026-10-25 1430 ", "AB12 ", "TR00 "
+_RETRIES = 2
+
+
 def find_iban(text: str, allow: Iterable[str] = ()) -> Iterator[Finding]:
+    runs = _Runs(text, " -")
     pos = 0
     while True:
         m = _IBAN.search(text, pos)
         if not m:
             return
-        pos = m.end()
+        start, end = m.span()
+        runs.begin(start)
         raw = m.group("iban")
-        compact = re.sub(r"[ -]", "", raw).upper()
+        compact = raw.replace(" ", "").replace("-", "").upper()
         n = IBAN_LENGTHS.get(compact[:2])
-        if not n or len(compact) < n:
-            continue
-        if len(compact) > n:
+        if n and len(compact) > n:
             # The greedy match ran into what follows (" TL", " 2024", the next IBAN). Keep the
             # country's length, but only when it ends at a group boundary of the original text.
-            end = _raw_end(raw, n)
-            if end >= len(raw) or raw[end] not in " -":
-                continue
-            compact = compact[:n]
-            pos = m.start("iban") + end
-        if compact in WELL_KNOWN_TEST_VALUES or compact in allow or m.group() in allow or not iban_valid(compact):
+            cut = _raw_end(raw, n)
+            if cut < len(raw) and raw[cut] in " -":
+                compact, end = compact[:n], m.start("iban") + cut
+        if not iban_valid(compact):
+            pos = runs.failed(start, m.end(), end)
             continue
-        yield Finding("iban", m.start(), pos, mask(compact), f"IBAN ({compact[:2]}), checksum valid")
+        runs.found()
+        pos = end
+        if compact in WELL_KNOWN_TEST_VALUES or compact in allow or m.group() in allow:
+            continue
+        yield Finding("iban", start, end, mask(compact), f"IBAN ({compact[:2]}), checksum valid")
 
 
 def _raw_end(raw: str, n: int) -> int:
@@ -363,11 +422,20 @@ def _raw_end(raw: str, n: int) -> int:
 
 
 # --------------------------------------------------------------------------- cards
-_CARD = re.compile(r"\d(?<!\d\d)(?:[ .-]?\d){12,18}(?!\d)")
+# 13 to 19 digits, one separator between groups: 4-4-4-4, 4-6-5, 4-6-4, 4-4-4-4-3 or a plain run. The first
+# group has at least four digits and the others at least two; single digits between separators are an OID
+# or a version string (1.3.6.1.4 ...), and "45 39 57 ..." is no way to write a card. Digits right after
+# "<digit>." are the fractional part of a decimal number (0.59215686274509804), not the start of a card.
+_CARD = re.compile(r"\d(?<!\d\d)(?<!\d\.\d)(?=\d{3})(?:\d|[ .-]\d(?=\d)){12,18}(?!\d)")
 _CARD_SEP = re.compile(r"[ .-]")
+_LUHN_DOUBLE = str.maketrans("0123456789", "0246813579")     # 2d, minus 9 when that is two digits
 
 
 def luhn_valid(digits: str) -> bool:
+    if digits.isascii():
+        # Digit sums from byte values (ASCII digits are 48..57): no Python loop over the digits.
+        kept, doubled = digits[-1::-2], digits[-2::-2].translate(_LUHN_DOUBLE)
+        return (sum(kept.encode()) + sum(doubled.encode()) - 48 * len(digits)) % 10 == 0
     total = 0
     for i, ch in enumerate(reversed(digits)):
         d = int(ch)
@@ -390,45 +458,58 @@ def _card_prefix_ok(digits: str) -> bool:
     return four == "9792"
 
 
-def _card_candidates(raw: str) -> Iterator[int]:
-    """Digit counts to try: the whole run, then shorter runs that end at a group boundary, so that a
-    trailing expiry date or CVV ("4539 ... 1486 12/26", "...1486 123") does not hide the number.
-    Shorter runs are only taken from groups of three or more digits (cards are printed in 4s, Amex
-    4-6-5), never from a string of single digits."""
-    groups = [len(g) for g in _CARD_SEP.split(raw) if g]
-    total = sum(groups)
-    yield total
+def _card_digits(raw: str) -> str:
+    return raw.replace(" ", "").replace(".", "").replace("-", "")
+
+
+def _card_length(raw: str) -> int:
+    """Digit count of the card number a candidate starts with, or 0. Tried: the whole run, then shorter
+    runs that end at a group boundary, so that a trailing expiry date or CVV ("4539 ... 1486 12/26",
+    "...1486 123") does not hide the number. Shorter runs are only taken from groups of three or more
+    digits (cards are printed in 4s, Amex 4-6-5)."""
+    if not _card_prefix_ok(raw):                 # the first group has four digits or more
+        return 0
+    digits = _card_digits(raw)
+    total = len(digits)
+    if luhn_valid(digits) and len(set(digits)) > 1:
+        return total
+    if total == len(raw):
+        return 0                                 # one group: nothing shorter ends at a boundary
     run = 0
     cuts = []
-    for g in groups[:-1]:
-        if g < 3:
+    for g in _CARD_SEP.split(raw)[:-1]:
+        if len(g) < 3:
             break
-        run += g
-        if 13 <= run <= 19:
+        run += len(g)
+        if 13 <= run:
             cuts.append(run)
-    yield from reversed(cuts)
+    for n in reversed(cuts):
+        cand = digits[:n]
+        if luhn_valid(cand) and len(set(cand)) > 1:
+            return n
+    return 0
 
 
 def find_card(text: str, allow: Iterable[str] = ()) -> Iterator[Finding]:
+    runs = _Runs(text, " .-")
     pos = 0
     while True:
         m = _CARD.search(text, pos)
         if not m:
             return
-        pos = m.end()
+        start, end = m.span()
+        runs.begin(start)
         raw = m.group()
-        digits = _CARD_SEP.sub("", raw)
-        if not _card_prefix_ok(digits):
+        n = _card_length(raw)
+        if not n:
+            pos = runs.failed(start, end, end)
             continue
-        for n in _card_candidates(raw):
-            cand = digits[:n]
-            if not 13 <= n <= 19 or len(set(cand)) == 1 or not luhn_valid(cand):
-                continue
-            if n < len(digits):
-                pos = m.start() + _raw_end_digits(raw, n)
-            if cand not in WELL_KNOWN_TEST_VALUES and cand not in allow:
-                yield Finding("card", m.start(), pos, mask(cand), "payment card number, Luhn valid")
-            break
+        runs.found()
+        digits = _card_digits(raw)
+        cand = digits[:n]
+        pos = end if n == len(digits) else start + _raw_end_digits(raw, n)
+        if cand not in WELL_KNOWN_TEST_VALUES and cand not in allow:
+            yield Finding("card", start, pos, mask(cand), "payment card number, Luhn valid")
 
 
 def _raw_end_digits(raw: str, n: int) -> int:
@@ -490,11 +571,12 @@ _SECRET_PATTERNS = (
     ("private key", re.compile(r"-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY(?: BLOCK)?-----"), False, False),
     ("AWS access key", re.compile(r"A(?:KIA|SIA)(?<![A-Z0-9]A...)[0-9A-Z]{16}(?![A-Z0-9])"), False, True),
     ("AWS secret key", re.compile(
-        r"aws[_-]?secret[_-]?access[_-]?key[\"']?[ \t]{0,5}[:=][ \t]{0,5}[\"']?(?P<value>[a-z0-9/+]{40})(?![a-z0-9/+=])"),
+        r"aws[_-]?secret[_-]?access[_-]?key[\"']?[ \t]*[:=][ \t]*[\"']?(?P<value>[a-z0-9/+]{40})(?![a-z0-9/+=])"),
      True, True),
     ("OpenAI/Anthropic-style key", re.compile(
         r"sk-(?<![\w-]sk-)(?:ant-|proj-|svcacct-|admin-)?[A-Za-z0-9_-]{20,}"), False, True),
     ("Stripe key", re.compile(r"[sr]k_(?:live|test)_(?<![\w-].{8})[A-Za-z0-9]{16,}"), False, True),
+    ("Stripe webhook secret", re.compile(r"whsec_(?<![\w-]whsec_)[A-Za-z0-9]{24,}"), False, True),
     ("GitHub token", re.compile(r"g(?<!\wg)(?:h[pousr]_[A-Za-z0-9]{36,}|ithub_pat_[A-Za-z0-9_]{22,})"), False, True),
     ("GitLab token", re.compile(r"glpat-(?<![\w-]glpat-)[A-Za-z0-9_-]{20,}"), False, True),
     ("npm token", re.compile(r"npm_(?<![\w-]npm_)[A-Za-z0-9]{36,}"), False, True),

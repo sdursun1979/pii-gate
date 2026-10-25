@@ -129,6 +129,8 @@ class ItalianCodiceFiscaleTests(unittest.TestCase):
     def test_algorithm_matches_published_examples(self):
         self.assertTrue(d.it_cf_valid("RSSMRA85T10A562S"))
         self.assertTrue(d.it_cf_valid("MRTMTT25D09F205Z"))
+        self.assertIn("MRTMTT25D09F205Z", d.WELL_KNOWN_TEST_VALUES)
+        self.assertEqual(list(d.find_it_cf("cf MRTMTT25D09F205Z")), [])
 
     def test_found_including_omocodia(self):
         self.assertEqual(rules(d.find_it_cf(f"cf: {syn.CF_A}")), ["it-cf"])
@@ -203,8 +205,32 @@ class SwedishPersonnummerTests(unittest.TestCase):
         day_sixty = syn.personnummer("900160123")
         self.assertEqual(list(d.find_se_personnummer(f"samordningsnummer {day_sixty}")), [])
 
-    def test_twelve_digit_form_is_not_matched(self):
-        self.assertEqual(list(d.find_se_personnummer(f"personnummer 19{syn.PNR_A}")), [])
+    def test_twelve_digit_form(self):
+        for text in (f"personnummer: {syn.PNR_12}", f"Personnummer {syn.PNR_12.replace('-', '')}",
+                     f"samordningsnummer 19{syn.SAMORDNING_A}"):
+            found = list(d.find_se_personnummer(text))
+            self.assertEqual(rules(found), ["se-personnummer"], text)
+            self.assertEqual(found[0].sample, "1***")
+        self.assertEqual(list(d.find_se_personnummer(f"order {syn.PNR_12} shipped")), [])     # still needs the label
+
+    def test_twelve_digit_form_century_and_date(self):
+        broken = syn.PNR_12[:-1] + str((int(syn.PNR_12[-1]) + 1) % 10)
+        for text in (f"personnummer 18{syn.PNR_A}", f"personnummer 21{syn.PNR_A}",   # century 19 or 20 only
+                     f"personnummer 19{syn.PNR_PLUS}",                              # "+" has no place here
+                     f"personnummer {broken}", f"personnummer 19{syn.PNR_BAD_DATE}"):
+            self.assertEqual(list(d.find_se_personnummer(text)), [], text)
+        leap = syn.personnummer("000229123")                 # 29 February: 2000 has it, 1900 does not
+        self.assertEqual(rules(d.find_se_personnummer(f"personnummer 20{leap}")), ["se-personnummer"])
+        self.assertEqual(list(d.find_se_personnummer(f"personnummer 19{leap}")), [])
+        self.assertTrue(d.se_personnummer_valid(leap, "", "20"))
+        self.assertFalse(d.se_personnummer_valid(leap, "", "19"))
+
+    def test_is_linear(self):
+        t0 = time.perf_counter()
+        for text in ("personnummer " + "19900101-" * 30000, "personnummer " + "1990" * 75000,
+                     "personnummer " + "19" * 150000, "personnummer " + "199001011239 " * 20000):
+            list(d.find_se_personnummer(text))
+        self.assertLess(time.perf_counter() - t0, 1.0)
 
     def test_engine_and_sql_gate(self):
         from pii_gate.engine import Engine
@@ -229,8 +255,20 @@ class BelgianRegisterNumberTests(unittest.TestCase):
         self.assertEqual(list(d.find_be_rrn(f"order {syn.RRN_A} shipped")), [])
 
     def test_written_forms_born_after_1999_and_bis_numbers(self):
-        for value in (syn.RRN_DOTTED, syn.RRN_2000, syn.RRN_BIS):
+        for value in (syn.RRN_DOTTED, syn.RRN_SPACED, syn.RRN_2000, syn.RRN_BIS):
             self.assertEqual(rules(d.find_be_rrn(f"NISS {value}")), ["be-rrn"], value)
+        found = list(d.find_be_rrn(f"NISS: {syn.RRN_SPACED}"))
+        self.assertEqual(found[0].sample, syn.RRN_SPACED[0] + "***")
+
+    def test_spaced_form_inside_a_longer_run_is_ignored(self):
+        for text in (f"NISS 12 {syn.RRN_SPACED}", f"NISS {syn.RRN_SPACED} 12",
+                     "NISS " + syn.RRN_SPACED.replace(" ", ".", 1)):                        # mixed separators
+            self.assertEqual(list(d.find_be_rrn(text)), [], text)
+
+    def test_published_examples_are_allowed(self):
+        for value in ("85073003328", "17073003384"):
+            self.assertIn(value, d.WELL_KNOWN_TEST_VALUES)
+            self.assertEqual(list(d.find_be_rrn(f"NISS {value}")), [], value)
 
     def test_bad_check_bad_date_and_turkish_phone_are_ignored(self):
         broken = syn.RRN_A[:-1] + str((int(syn.RRN_A[-1]) + 1) % 10)
@@ -249,6 +287,8 @@ class BelgianRegisterNumberTests(unittest.TestCase):
         t0 = time.perf_counter()
         list(d.find_be_rrn("NISS " + "12.34.56-" * 100000))
         list(d.find_be_rrn("NISS " + "1" * 1_000_000))
+        list(d.find_be_rrn("NISS " + "90 01 01 " * 100000))
+        list(d.find_be_rrn("NISS " + "12 " * 300000))
         self.assertLess(time.perf_counter() - t0, 1.0)
 
 
@@ -301,8 +341,8 @@ class NormalisationTests(unittest.TestCase):
 
 
 class GroupedTcknTests(unittest.TestCase):
-    def test_space_and_dot_groups(self):
-        for sep in (" ", "."):
+    def test_space_dot_and_dash_groups(self):
+        for sep in (" ", ".", "-"):
             found = list(d.find_tckn("tc: " + syn.tckn_grouped(syn.TCKN_A, sep)))
             self.assertEqual(rules(found), ["tckn"], sep)
             self.assertEqual(found[0].sample, syn.TCKN_A[0] + "***")
@@ -310,10 +350,19 @@ class GroupedTcknTests(unittest.TestCase):
     def test_phones_mixed_separators_and_longer_runs_are_ignored(self):
         broken = syn.TCKN_A[:-1] + str((int(syn.TCKN_A[-1]) + 1) % 10)
         mixed = syn.TCKN_A[:3] + " " + syn.TCKN_A[3:6] + "." + syn.TCKN_A[6:9] + " " + syn.TCKN_A[9:]
+        dashed = syn.tckn_grouped(syn.TCKN_A, "-")
         for text in ("+90 532 123 45 67", "0532 123 45 67", "532 123 45 67", "90 532 123 45 67", mixed,
                      "1 " + syn.tckn_grouped(syn.TCKN_A), syn.tckn_grouped(syn.TCKN_A) + " 12",
-                     syn.tckn_grouped(broken), syn.tckn_grouped("10000000146")):
+                     syn.tckn_grouped(broken), syn.tckn_grouped("10000000146"),
+                     "0532-123-45-67", "1-" + dashed, dashed + "-12", dashed[:7] + " " + dashed[8:],
+                     syn.tckn_grouped(broken, "-")):
             self.assertEqual(list(d.find_tckn(text)), [], text)
+
+    def test_grouped_forms_are_linear(self):
+        t0 = time.perf_counter()
+        for text in ("123-456-789-" * 100000, "1-" * 500000, "123 " * 300000):
+            list(d.find_tckn(text))
+        self.assertLess(time.perf_counter() - t0, 1.0)
 
 
 class IbanFormatTests(unittest.TestCase):
@@ -329,6 +378,21 @@ class IbanFormatTests(unittest.TestCase):
         for text in (spaced + " TL", spaced + " USD 1500", spaced + " 2024", spaced + "\n2024",
                      syn.IBAN_TR + " 15000 TL", syn.IBAN_TR + " X"):
             self.assertEqual(rules(d.find_iban(text)), ["iban"], text)
+
+    def test_leading_code_does_not_hide_the_iban(self):
+        spaced = syn.grouped(syn.IBAN_TR)
+        for lead in ("AB12 ", "TR00 ", "TR00 AB12 ", "x9 AB12 "):
+            for value in (syn.IBAN_TR, spaced):
+                text = lead + value
+                found = list(d.find_iban(text))
+                self.assertEqual(rules(found), ["iban"], text)
+                self.assertEqual(text[found[0].start:found[0].end], value, text)
+
+    def test_restarts_stay_linear(self):
+        t0 = time.perf_counter()
+        for text in ("AB12 " * 200_000, ("TR00 " * 6 + "x ") * 10_000):
+            self.assertEqual(list(d.find_iban(text)), [])
+        self.assertLess(time.perf_counter() - t0, 1.0)
 
     def test_two_ibans_in_a_row(self):
         self.assertEqual(rules(d.find_iban(syn.IBAN_TR + " " + syn.IBAN_GB)), ["iban", "iban"])
@@ -370,6 +434,30 @@ class CardFormatTests(unittest.TestCase):
     def test_two_cards(self):
         self.assertEqual(rules(d.find_card(syn.CARD_VISA + " " + syn.CARD_MC)), ["card", "card"])
 
+    def test_leading_number_does_not_hide_the_card(self):
+        spaced = syn.grouped(syn.CARD_VISA)
+        for lead in ("1 ", "4 ", "12 ", "2026-10-25 ", "25.10.2026 ", "2026-10-25 1430 ", "Tel 0532 123 45 67 ",
+                     "6011 "):                                   # an issuer prefix, but no Luhn match with it
+            for value in (syn.CARD_VISA, spaced):
+                text = lead + value
+                found = list(d.find_card(text))
+                self.assertEqual(rules(found), ["card"], text)
+                self.assertEqual(text[found[0].start:found[0].end], value, text)
+
+    def test_single_and_two_digit_groups_are_not_cards(self):
+        for text in (".".join(syn.CARD_VISA), " ".join(syn.CARD_VISA), "-".join(syn.CARD_VISA),
+                     syn.grouped(syn.CARD_VISA, 2), syn.grouped(syn.CARD_VISA, 2, "."),
+                     "1.3.6.1.4.1." + ".".join(syn.CARD_VISA)):
+            self.assertEqual(list(d.find_card(text)), [], text)
+        self.assertEqual(rules(d.find_card(syn.CARD_VISA[:4] + " " + syn.CARD_VISA[4:10] + " " + syn.CARD_VISA[10:])),
+                         ["card"])
+
+    def test_restarts_stay_linear(self):
+        t0 = time.perf_counter()
+        for text in ("1 " * 200_000, "45 " * 200_000, ("4539 " * 6 + "x ") * 10_000, "4539 " * 60_000):
+            self.assertEqual(list(d.find_card(text)), [])
+        self.assertLess(time.perf_counter() - t0, 1.0)
+
     def test_near_misses(self):
         for text in (syn.card("979112345678901"), syn.card("220512345678901"), syn.card("272112345678901"),
                      syn.card("153957876362148"), "4111 1111 1111 1111 1", "1729770000" + syn.CARD_VISA,
@@ -381,7 +469,7 @@ class SecretFormatTests(unittest.TestCase):
     TOKENS = {
         "Stripe key": syn.STRIPE_KEY, "GitLab token": syn.GITLAB_TOKEN, "npm token": syn.NPM_TOKEN,
         "Hugging Face token": syn.HF_TOKEN, "PyPI token": syn.PYPI_TOKEN, "SendGrid key": syn.SENDGRID_KEY,
-        "Slack webhook": syn.SLACK_WEBHOOK,
+        "Slack webhook": syn.SLACK_WEBHOOK, "Stripe webhook secret": syn.STRIPE_WEBHOOK_SECRET,
         "Telegram bot token": syn.TELEGRAM_TOKEN, "age secret key": syn.AGE_KEY,
         "AWS secret key": "aws_secret_access_key = " + syn.AWS_SECRET,
         "Azure storage key": "DefaultEndpointsProtocol=https;AccountName=x;AccountKey=" + syn.AZURE_KEY + ";",
@@ -401,6 +489,9 @@ class SecretFormatTests(unittest.TestCase):
         for text in ("redis://:" + syn.SYN_PASSWORD + "@redis:6379/0",
                      "mongodb+srv://app:" + syn.SYN_PASSWORD + "@cluster.internal/db",
                      "AWS_SECRET_ACCESS_KEY=" + syn.AWS_SECRET,
+                     "aws_secret_access_key      = " + syn.AWS_SECRET,
+                     "aws_secret_access_key\t\t\t=\t\t" + syn.AWS_SECRET,
+                     "STRIPE_WEBHOOK_SECRET=" + syn.STRIPE_WEBHOOK_SECRET,
                      '{"Authorization": "Basic ' + syn.BEARER_TOKEN + '"}',
                      "https://api.telegram.org/bot" + syn.TELEGRAM_TOKEN + "/getMe",
                      "rk_test_" + syn.STRIPE_KEY[8:]):
@@ -415,8 +506,16 @@ class SecretFormatTests(unittest.TestCase):
                      "pk_live_" + syn.STRIPE_KEY[8:], "npm_config_registry=https://registry.npmjs.org",
                      syn.SLACK_WEBHOOK_PLACEHOLDER,
                      "aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+                     "whsec_" + "x" * 32, "whsec_" + "1234", "my_whsec_" + syn.STRIPE_WEBHOOK_SECRET[6:],
                      "123" + syn.TELEGRAM_TOKEN):                       # 12-digit id: not a bot id
             self.assertEqual(list(d.find_secrets(text)), [], text)
+
+    def test_widened_patterns_are_linear(self):
+        t0 = time.perf_counter()
+        for text in ("aws_secret_access_key" + " " * 250_000, "aws_secret_access_key \t" * 10_000,
+                     "aws_secret_access_key =" + " " * 250_000, "whsec_" * 40_000):
+            list(d.find_secrets(text))
+        self.assertLess(time.perf_counter() - t0, 1.0)
 
     def test_jwt_is_not_excused_by_placeholder_words(self):
         jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJzeW50aGV0aWMifQ.xxx" + "Zq7Wm2Lp9Xr4Tn6V"
@@ -464,6 +563,8 @@ class AssignmentTests(unittest.TestCase):
     def test_reported_once_when_a_token_pattern_matches(self):
         found = list(d.find_secrets("aws_secret_access_key = " + syn.AWS_SECRET))
         self.assertEqual([f.note for f in found], ["AWS secret key"])
+        found = list(d.find_secrets("STRIPE_WEBHOOK_SECRET=" + syn.STRIPE_WEBHOOK_SECRET))
+        self.assertEqual([f.note for f in found], ["Stripe webhook secret"])
 
 
 class EmailFormatTests(unittest.TestCase):
@@ -482,10 +583,15 @@ class EmailFormatTests(unittest.TestCase):
 class SpanishIdFormatTests(unittest.TestCase):
     def test_separators_after_nie_letter_and_before_check_letter(self):
         n = syn.NIE_A
-        for text in (f"{n[0]}-{n[1:8]}-{n[8]}", f"{n[0]} {n[1:8]} {n[8]}", f"{syn.DNI_A[:8]} {syn.DNI_A[8]}"):
+        for text in (f"{n[0]}-{n[1:8]}-{n[8]}", f"{n[0]} {n[1:8]} {n[8]}", f"{syn.DNI_A[:8]}-{syn.DNI_A[8]}"):
             found = list(d.find_es_id(text))
             self.assertEqual(rules(found), ["es-dni"], text)
             self.assertEqual(found[0].sample, text[0] + "***")
+
+    def test_dni_letter_after_a_space_is_not_taken(self):
+        # any 8-digit number followed by a capital letter would pass one time in 23
+        for text in (f"{syn.DNI_A[:8]} {syn.DNI_A[8]}", f"size {syn.DNI_A[:8]} {syn.DNI_A[8]} bytes"):
+            self.assertEqual(list(d.find_es_id(text)), [], text)
 
     def test_wrong_letter_with_separator(self):
         wrong = "A" if syn.DNI_A[8] != "A" else "B"

@@ -171,9 +171,13 @@ def evaluate(payload: dict, cfg: Config) -> Tuple[Report, str, str]:
         return engine.report(findings), event, tool
 
     paths = [str(tool_input[k]) for k in PATH_KEYS if isinstance(tool_input.get(k), str)]
-    extra = tool_input.get("file_paths")
-    if isinstance(extra, list):
-        paths += [str(p) for p in extra if isinstance(p, str)]
+    for key in ("file_paths", "paths"):                 # SendUserFile, Gemini read_many_files
+        extra = tool_input.get(key)
+        if isinstance(extra, list):
+            paths += [str(p) for p in extra if isinstance(p, str)]
+    # Relative paths are relative to the agent's cwd, which may be outside the project: make them
+    # absolute before any allow_paths or tamper decision.
+    paths = [_resolve(p, cwd) for p in paths]
 
     # 2. Reads and file sends: the file's content is what leaves, so look at the file.
     if tool in READ_TOOLS or tool in FILE_SEND_TOOLS:
@@ -190,7 +194,7 @@ def evaluate(payload: dict, cfg: Config) -> Tuple[Report, str, str]:
     # 3. File writes: what the agent writes, not what already exists. Honour allow_paths for local files.
     if tool == "apply_patch":
         patch = str(tool_input.get("command", tool_input.get("input", "")))
-        paths = _PATCH_FILE.findall(patch)
+        paths = [_resolve(p, cwd) for p in _PATCH_FILE.findall(patch)]
         texts = [_added_lines(patch)]
     elif tool in ("Edit", "replace"):
         texts = [str(tool_input.get("new_string", ""))]
@@ -212,7 +216,15 @@ def evaluate(payload: dict, cfg: Config) -> Tuple[Report, str, str]:
         return engine.report(findings), event, tool
     for text in texts:
         findings += engine.findings(text)
-    return engine.report(findings), event, tool
+    rep = engine.report(findings)
+    if tool in LOCAL_WRITE_TOOLS:
+        # SQL written into a source file is not executed by this call; it is a warning here and a
+        # block when a shell or MCP tool runs it. Otherwise a web app's user-listing query could
+        # never be written.
+        sql = [f for f in rep.blocking if f.rule.startswith("sql-")]
+        rep.blocking = [f for f in rep.blocking if not f.rule.startswith("sql-")]
+        rep.warnings += sql
+    return rep, event, tool
 
 
 def _stdout_for(payload: dict, event: str) -> str:

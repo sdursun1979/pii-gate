@@ -90,10 +90,18 @@ def apply(cfg: Config, data: dict, path: str = "<config>", trusted: bool = True)
                 f"{path}: a project config may not lower '{rule}' from {cfg.level(rule)} to {level}; "
                 f"put it in ~/{FILE_NAME} or set \"trust_project_config\": true there")
         cfg.levels[rule] = level
+    for key in ("allow_values", "email_allow_domains"):
+        values = _as_list(data, key, path)
+        if values and not trusted:
+            raise ConfigError(f"{path}: '{key}' loosens the gate and is only read from ~/{FILE_NAME} or ${ENV_VAR}")
     cfg.allow_values |= set(_as_list(data, "allow_values", path))
     for pattern in _as_list(data, "allow_paths", path):
-        if not trusted and (pattern.startswith(("/", "\\", "~")) or ".." in pattern or _DRIVE.match(pattern)):
-            raise ConfigError(f"{path}: a project config may only allow paths inside the project, not '{pattern}'")
+        if not trusted:
+            first = pattern.replace("\\", "/").lstrip("./").split("/", 1)[0]
+            if (pattern.startswith(("/", "\\", "~")) or ".." in pattern or _DRIVE.match(pattern)
+                    or not first or any(ch in first for ch in "*?[")):
+                raise ConfigError(f"{path}: a project config may only allow paths inside a named folder of the project "
+                                  f"(like 'tests/*'), not '{pattern}'")
         cfg.allow_paths.append(pattern)
     cfg.email_allow_domains += _as_list(data, "email_allow_domains", path)
     sql = data.get("sql", {})
@@ -104,7 +112,10 @@ def apply(cfg: Config, data: dict, path: str = "<config>", trusted: bool = True)
         raise ConfigError(f"{path}: unknown sql key(s) {', '.join(unknown)} (known: {', '.join(sorted(KNOWN_SQL_KEYS))})")
     cfg.sql_extra_columns |= set(_as_list(sql, "extra_pii_columns", path))
     cfg.sql_extra_person_tables |= set(_as_list(sql, "extra_person_tables", path))
-    cfg.sql_ignore_columns |= set(_as_list(sql, "ignore_columns", path))
+    ignored = _as_list(sql, "ignore_columns", path)
+    if ignored and not trusted:
+        raise ConfigError(f"{path}: 'sql.ignore_columns' loosens the gate and is only read from ~/{FILE_NAME} or ${ENV_VAR}")
+    cfg.sql_ignore_columns |= set(ignored)
     for key in USER_ONLY_KEYS:
         if key in data:
             if not isinstance(data[key], bool):

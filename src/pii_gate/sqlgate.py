@@ -13,6 +13,7 @@ Every step keeps the text the same length, so finding offsets point into the ori
 from __future__ import annotations
 
 import re
+from bisect import bisect_left
 from typing import Iterable, Iterator, List, Optional, Set, Tuple
 
 from .detectors import Finding
@@ -109,7 +110,7 @@ def _kw(*words: str) -> str:
 
 
 _SELECT = re.compile(r"select(?<![\w$.]select)\b")              # not el.select(), $select
-_FROM = re.compile(_kw("from"))
+_FROM = re.compile(_kw("from") + r"(?!\s+[\w.]+\s+import\b)")   # Python's "from x import y" is no FROM
 _DML = re.compile(_kw("insert", "update", "delete", "merge"))
 _RETURNING = re.compile(_kw("returning"))
 _RETURNING_END = re.compile(r";|" + _kw("into"))
@@ -123,17 +124,37 @@ _TABLE = r"[#\w.\[\]\"`]+"
 _COPY = re.compile(r"(?P<cmd>\\copy|copy(?<!\wcopy))\s+(?P<table>" + _TABLE + r")(?:\s*\((?P<cols>[^()]{0,2000})\))?"
                    r"\s+to\b(?P<target>\s+(?:'|e'|stdout\b|program\b|pstdout\b))?")
 _BCP = re.compile(_kw("bcp") + r"\s+(?P<table>" + _TABLE + r")\s+out\b")
+# PostgreSQL / MySQL 8 "TABLE patients" is SELECT * FROM patients. Taken only as a whole statement: the
+# table name is followed by the end of the statement (or ORDER BY, LIMIT, a set operation ...), and the
+# keyword starts the statement (checked in _scan_table_statements), so "the table users has" stays prose.
+_TABLE_STMT = re.compile(_kw("table") + r"\s+(?:only\s+)?(?P<table>" + _TABLE + r")(?![#\w.\[\]\"`])(?:\s*\*)?"
+                         r"(?=\s*(?:;|\)|[\"'`]|\\g|\Z)|\s+(?:order|limit|offset|fetch|union|intersect|except)\b)")
+# The statement starts at the start of the text or a line, after ; ( or a quote, or after a set operation.
+_STATEMENT_START_CHARS = frozenset(";(\n\"'`")
+_SET_OPERATION_END = re.compile(r"\b(?:union|intersect|except|all|distinct)\Z")
+# ... and is not part of DDL or another command that names a table (CREATE TABLE, LOCK TABLE ...).
+_NOT_A_TABLE_STATEMENT = frozenset({
+    "create", "alter", "drop", "truncate", "into", "lock", "rename", "temp", "temporary", "exists", "only",
+    "unlogged", "foreign", "external", "global", "local", "on", "analyze", "optimize", "check", "repair",
+    "describe", "desc", "show", "comment", "cache", "uncache", "refresh"})
 _TABLE_REFS = re.compile(_kw("from", "join", "update", "into") + r"\s+(" + _TABLE + r")")
 
 _BLANK_LINE = re.compile(r"\n[ \t\r]*\n")
-_SHORT_LIST = 2000        # a list with no FROM before the next blank line ends here
-_LONG_LIST = 20000        # a list that does reach a FROM (long ORM column lists) ends here at the latest
-# A "list" that reads as prose: two of these words, or a sentence that ends right after its first
-# word, or a keyword quoted as a mention (`select`, "SELECT"). SQL keywords are deliberately absent.
-_STOP_WORDS = re.compile(
-    r"(?<![\w.])(?<!\bas )(?:the|a|an|of|to|with|that|this|which|these|those|are|be|it|its|was|would|could"
-    r"|should|bir|ve|ile|icin|bu|su|olan|is(?!\s+(?:not|null|true|false|distinct|unknown)\b))(?![\w.])", re.I)
-_PROSE_START = re.compile(r"[`'\",.;:!?)]|\s*[\w*]+[.!?:;](?:\s|$)")
+_PARA_BREAK = re.compile(r"\n[ \t\r\n]*\n")      # one or more blank lines
+_HSPACE = re.compile(r"[ \t\r]*")
+_SHORT_LIST = 2000        # a SELECT list with no FROM in reach ends at the next blank line or here
+_LONG_LIST = 20000        # a list that does reach a FROM (long ORM column lists) runs to it, blank lines or not
+# A "list" that reads as prose: two of these words (one when it runs over a paragraph break that is not
+# a comma-separated list going on), or a sentence that ends right after its first word, or a keyword
+# quoted as a mention (`select`, "SELECT"). SQL keywords are deliberately absent. Words inside a quoted
+# name ("date of birth") do not count.
+_STOP_WORDS = re.compile(                         # the first-letter test lets the engine skip most positions
+    r"(?=[abcostviw])(?<![\w.])(?<!\bas )(?:the|a|an|of|to|with|that|this|which|these|those|are|be|it|its|was"
+    r"|would|could|should|bir|ve|ile|icin|bu|su|olan|is(?!\s+(?:not|null|true|false|distinct|unknown)\b))(?![\w.])",
+    re.I)
+_SENTENCE_END = re.compile(r"\s*[\w*]+[.!?:;](?:\s|$)")
+_PROSE_CHARS = frozenset(",.;:!?)")
+_QUOTE_CHARS = frozenset("`'\"")
 
 _STRING_OR_COMMENT = re.compile(r"'|--(?=\s|\Z)|/\*")
 _NOT_NEWLINE = re.compile(r"[^\n]+")
@@ -144,7 +165,11 @@ _TR_FOLD_RE = re.compile("[" + "".join(_TR_FOLD) + "]")
 _BRACKETED = re.compile(r"\[([^\[\]\n]{1,128})\]")
 _QUOTED_NAME = re.compile(r"\"([^\"\n]{1,128})\"|`([^`\n]{1,128})`")
 _NAME_SPACE = re.compile(r"[\s-]")
-_FROM_IN_FUNC = re.compile(_kw("extract", "trim", "substring", "position", "overlay") + r"\s*\([^()]*?\bfrom\b")
+# The FROM inside EXTRACT(YEAR FROM x), SUBSTRING(COALESCE(a, b) FROM 1 FOR 3) ...: one level of nested
+# parentheses before it, every repetition bounded.
+_FROM_IN_FUNC = re.compile(_kw("extract", "trim", "substring", "position", "overlay")
+                           + r"\s*\((?:[^()]|\([^()]{0,2000}\)){0,2000}?\bfrom\b")
+_SQL_WORDS = re.compile(_kw("select", "from"))    # a quoted span holding these is a string, not a name
 _IDENT = re.compile(r"[^\W\d]\w*")
 _DELIMITERS = re.compile(r"[\[\]\"`]")
 _STAR = re.compile(r"(?:^|[\s,])(?:(?:\[[^\]\n]*\]|\"[^\"\n]*\"|`[^`\n]*`|\w+)\.)*\*(?=\s|,|\)|;|$)")
@@ -161,8 +186,9 @@ def _lower(text: str) -> str:
 
 def looks_like_sql(text: str) -> bool:
     """Cheap pre-check, every test a linear search: a SELECT followed somewhere by a FROM, a
-    RETURNING after an INSERT/UPDATE/DELETE, an OUTPUT inserted./deleted. list, a COPY ... TO or a
-    bcp ... out. (A lazy `select.*?from` regex is quadratic on text with many SELECTs and no FROM.)"""
+    RETURNING after an INSERT/UPDATE/DELETE, an OUTPUT inserted./deleted. list, a COPY ... TO, a
+    bcp ... out or a TABLE statement. (A lazy `select.*?from` regex is quadratic on text with many
+    SELECTs and no FROM.)"""
     low = text.lower()
     if "select" in low:
         m = _SELECT.search(low)
@@ -182,6 +208,8 @@ def looks_like_sql(text: str) -> bool:
         m = _BCP_WORD.search(low)
         if m and _OUT.search(low, m.end()):
             return True
+    if "table" in low and next(_table_statements(low), None):
+        return True
     return False
 
 
@@ -312,15 +340,78 @@ def person_context(text: str, person_tables: Iterable[str]) -> bool:
 
 
 # --------------------------------------------------------------------------- lists
-def _is_prose(cols: str) -> bool:
-    if _PROSE_START.match(cols):
-        return True
-    hits = 0
-    for _ in _STOP_WORDS.finditer(cols):
-        hits += 1
-        if hits >= 2:
+def _plain_hits(words: Iterator["re.Match[str]"], names: Iterator["re.Match[str]"]) -> Iterator[int]:
+    """Starts of the stop words in `words` that are not inside a quoted name ("date of birth") from `names`;
+    both in text order. A quoted span holding SELECT or FROM is a string, not a name: its words count."""
+    name = next(names, None)
+    for m in words:
+        p = m.start()
+        while name is not None and name.end() <= p:
+            name = next(names, None)
+        if name is not None and name.start() < p and not _SQL_WORDS.search(_lower(name.group())):
+            continue
+        yield p
+
+
+class _Prose:
+    """Prose verdicts for one kind of list, asked for in text order. Stop words and paragraph breaks are
+    found lazily, once, from the first list on; a verdict then costs a few binary searches, so that a text
+    of many SELECTs sharing one far FROM is not scanned again for each of them."""
+
+    def __init__(self, text: str):
+        self.text = text
+        self._from = _END                    # where the scan began
+
+    def _begin(self, start: int) -> None:
+        text = self.text
+        self._from = start
+        line = text.rfind("\n", 0, start) + 1     # quoted names never span lines: pair the quotes from here
+        self._words = _plain_hits(_STOP_WORDS.finditer(text, start), _QUOTED_NAME.finditer(text, line))
+        self.hits: List[int] = []
+        self._last_hit = -1                  # the last stop word found, _END when there are no more
+        self._breaks = _PARA_BREAK.finditer(text, start)
+        self.starts: List[int] = []          # paragraph breaks, and a running count of those that no
+        self.plain = [0]                     # comma-separated list goes on over ("id,\n\n  name" does)
+        self._last_break = -1
+
+    def _hits_before(self, end: int) -> None:
+        while self._last_hit < end:
+            self._last_hit = next(self._words, _END)
+            if self._last_hit < _END:
+                self.hits.append(self._last_hit)
+
+    def _breaks_before(self, end: int) -> None:
+        text = self.text
+        while self._last_break < end:
+            m = next(self._breaks, None)
+            if m is None:
+                self._last_break = _END
+                return
+            b, e = m.span()
+            comma = text[max(0, b - 256):b].rstrip(" \t\r").endswith(",") or \
+                text.startswith(",", _HSPACE.match(text, e).end())
+            self.starts.append(b)
+            self.plain.append(self.plain[-1] + (not comma))
+            self._last_break = b
+
+    def is_prose(self, kw_start: int, start: int, end: int) -> bool:
+        text = self.text
+        ch = text[start:start + 1]
+        if ch in _PROSE_CHARS:
             return True
-    return False
+        if ch in _QUOTE_CHARS:                       # `select`, "SELECT" are mentions; SELECT"col" is a list
+            return text[kw_start - 1:kw_start] == ch
+        if _SENTENCE_END.match(text, start, end):
+            return True
+        if start < self._from:
+            self._begin(start)                       # first list (callers ask in text order)
+        self._breaks_before(end)
+        broken = self.plain[bisect_left(self.starts, end)] > self.plain[bisect_left(self.starts, start)]
+        self._hits_before(end)
+        return bisect_left(self.hits, end) - bisect_left(self.hits, start) >= (1 if broken else 2)
+
+
+_END = 1 << 62
 
 
 class _NextMatch:
@@ -339,9 +430,10 @@ class _NextMatch:
         return self.match
 
 
-def _select_lists(text: str, low: str) -> Iterator[Tuple[int, int]]:
-    """(start, end) of each SELECT list: up to its FROM when that comes before the next blank line,
-    otherwise up to the blank line, at most _SHORT_LIST characters. Prose is skipped."""
+def _select_lists(text: str, low: str, prose: _Prose) -> Iterator[Tuple[int, int]]:
+    """(start, end) of each SELECT list: up to its FROM when that is at most _LONG_LIST characters
+    away (blank lines in between or not), otherwise up to the next blank line, at most _SHORT_LIST
+    characters. Prose is skipped."""
     n = len(text)
     froms, blanks = _NextMatch(_FROM, low), _NextMatch(_BLANK_LINE, text)
     pos = 0
@@ -351,21 +443,20 @@ def _select_lists(text: str, low: str) -> Iterator[Tuple[int, int]]:
             return
         start = m.end()
         pos = start
-        blank = blanks.at_or_after(start)
-        para_end = blank.start() if blank else n
         f = froms.at_or_after(start)
-        if f and f.start() < para_end and f.start() - start <= _LONG_LIST:
+        if f and f.start() - start <= _LONG_LIST:
             end, resume = f.start(), f.end()
         else:
-            end = resume = min(para_end, start + _SHORT_LIST)
-        if _is_prose(text[start:end]):
+            blank = blanks.at_or_after(start)
+            end = resume = min(blank.start() if blank else n, start + _SHORT_LIST)
+        if prose.is_prose(m.start(), start, end):
             continue                                                 # resume right after this SELECT
         pos = resume
         yield start, end
 
 
-def _keyword_lists(text: str, low: str, keyword: "re.Pattern[str]", end_re: "re.Pattern[str]",
-                   after: int = 0) -> Iterator[Tuple[int, int]]:
+def _keyword_lists(text: str, low: str, prose: _Prose, keyword: "re.Pattern[str]",
+                   end_re: "re.Pattern[str]", after: int = 0) -> Iterator[Tuple[int, int]]:
     n = len(text)
     pos = after
     while True:
@@ -380,7 +471,7 @@ def _keyword_lists(text: str, low: str, keyword: "re.Pattern[str]", end_re: "re.
         e = end_re.search(low, start, limit)
         end = e.start() if e else limit
         pos = max(end, start + 1)
-        if not _is_prose(text[start:end]):
+        if not prose.is_prose(m.start(), start, end):
             yield start, end
 
 
@@ -446,18 +537,20 @@ def _scan_statement(raw: str, rules: _Rules, nested_level: bool = False) -> Iter
     low = _FROM_IN_FUNC.sub(lambda m: m.group()[:-4] + "    ", low)   # EXTRACT(YEAR FROM x) does not end a list
     person = _person_context(text, low, rules.person_tables)
     if "select" in low:
-        for start, end in _select_lists(text, low):
+        for start, end in _select_lists(text, low, _Prose(text)):
             yield from _scan_list(text, start, end, 0, person, rules, "SELECT")
     if "returning" in low:
         m = _DML.search(low)
         if m:
-            for start, end in _keyword_lists(text, low, _RETURNING, _RETURNING_END, m.end()):
+            for start, end in _keyword_lists(text, low, _Prose(text), _RETURNING, _RETURNING_END, m.end()):
                 yield from _scan_list(text, start, end, 0, person, rules, "RETURNING")
     if "output" in low:
-        for start, end in _keyword_lists(text, low, _OUTPUT, _OUTPUT_END):
+        for start, end in _keyword_lists(text, low, _Prose(text), _OUTPUT, _OUTPUT_END):
             yield from _scan_list(text, start, end, 0, person, rules, "OUTPUT")
     if "copy" in low or "bcp" in low:
         yield from _scan_exports(text, low, rules)
+    if "table" in low:
+        yield from _scan_table_statements(text, low, rules)
     if nested and not nested_level:
         yield from _scan_statement(_nested_canvas(raw, nested), rules, nested_level=True)
 
@@ -477,6 +570,31 @@ def _scan_exports(text: str, low: str, rules: _Rules) -> Iterator[Finding]:
         table = text[m.start("table"):m.end("table")]
         if is_person_table(table, rules.person_tables):
             yield Finding("sql-star", m.start(), m.end("table"), _clean(table).lower(), "table export of a person table")
+
+
+def _table_statements(low: str) -> Iterator["re.Match[str]"]:
+    """TABLE <name> statements: the keyword starts a statement and is not part of DDL (CREATE TABLE ...)."""
+    for m in _TABLE_STMT.finditer(low):
+        before = low[max(0, m.start() - 64):m.start()]
+        head = before.rstrip(" \t\r")
+        if head and head[-1] not in _STATEMENT_START_CHARS and not _SET_OPERATION_END.search(head[-10:]):
+            continue
+        words = before.split()
+        if words and words[-1] in _NOT_A_TABLE_STATEMENT:       # CREATE TABLE, DROP\nTABLE ...
+            continue
+        yield m
+
+
+def _scan_table_statements(text: str, low: str, rules: _Rules) -> Iterator[Finding]:
+    """TABLE patients (PostgreSQL, MySQL 8): the whole table, like SELECT *."""
+    person: dict = {}
+    for m in _table_statements(low):
+        table = text[m.start("table"):m.end("table")]
+        if table not in person:
+            person[table] = is_person_table(table, rules.person_tables)
+        if person[table]:
+            yield Finding("sql-star", m.start(), m.end("table"), _clean(table).lower(),
+                          "TABLE statement on a person table")
 
 
 def find_sql(text: str, extra_core: Iterable[str] = (), extra_person: Iterable[str] = (),
