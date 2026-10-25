@@ -49,11 +49,14 @@ the agents' current hook documentation and by trying to get data past the gate w
   verified, coordination numbers (day + 60) and the `+` separator for people over 100 understood;
   matched only next to a `personnummer` or `samordningsnummer` label. `personnummer` and
   `samordningsnummer` are core SQL columns. Contributed by bh-official (#7).
+- **HTTPie and xh uploads** (`http`/`https`/`xh`/`xhs` with `POST`/`PUT`/`PATCH`, `--form`, a request item
+  read from a file or `< file`) are `exfil` findings; the command is located by command position, not by a
+  regex over the line, because `http` also starts every URL. Contributed by arxigen (#8).
 - **Belgian national register number** (`be-rrn`, NISS / INSZ): the two mod 97 check digits verified
   for people born before and after 2000, unknown dates (00) and bis numbers (month + 20 or + 40)
   understood; written plain or as `YY.MM.DD-SSS.CC`; matched only next to a `rijksregisternummer`,
   `registre national`, `NISS` or `INSZ` label. `rijksregisternummer`, `niss` and `insz` are core SQL
-  columns.
+  columns. Contributed by arxigen (#9).
 - **Gemini CLI** support (`pii-gate install gemini`): `BeforeTool` and `BeforeAgent` events,
   `run_shell_command`, `write_file`, `replace`, `read_file`.
 - **Read gate** (`read`, default block): a `Read`/`read_file` of a local file whose content holds
