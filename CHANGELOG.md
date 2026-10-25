@@ -37,9 +37,10 @@ Follow-up to an independent audit of 0.3.0 (synthetic data only, all findings re
 - Detectors: a leading number, date or code no longer hides a card or an IBAN; card groups must be
   4+ then 2+ digits (no more OID/version/decimal false positives); TCKN with dashes; Swedish
   personnummer in the 12-digit form; Belgian number in space groups; Stripe webhook secrets; AWS
-  secret keys with alignment spaces; `TABLE <person table>` is `sql-star`; select lists run across
-  blank lines, quoted aliases do not count as prose, `SELECT"col"` is SQL. The Spanish DNI no
-  longer accepts a space before the check letter (1-in-23 false positive on any 8-digit number).
+  secret keys with alignment spaces; `TABLE <person table>` is `sql-star`; column lists run across
+  blank lines, quoted aliases do not count as prose, a quoted column glued to the keyword is still
+  SQL. The Spanish ID no longer accepts a space before the check letter (a 1-in-23 false positive
+  on any 8-digit number).
 - **HTTPie and xh uploads** (`http`/`https`/`xh`/`xhs` with `POST`/`PUT`/`PATCH`, `--form`, a request item
   read from a file or `< file`) are `exfil` findings; the command is located by command position, not by a
   regex over the line, because `http` also starts every URL. Contributed by arxigen (#8).
