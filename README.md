@@ -54,6 +54,7 @@ Windows and less on Linux, most of it interpreter start-up.
 | `nl-bsn`          | block   | Dutch BSN (11-check), only next to a `BSN` or `burgerservicenummer` label               |
 | `pl-pesel`        | block   | Polish PESEL (checksum and birth date), only next to a `PESEL` label                     |
 | `se-personnummer` | block   | Swedish personnummer / samordningsnummer (Luhn and birth date), only next to a `personnummer` or `samordningsnummer` label |
+| `be-rrn`          | block   | Belgian national register number / NISS / INSZ (mod 97 check digits, month and day), only next to a `rijksregisternummer`, `registre national`, `NISS` or `INSZ` label |
 | `iban`            | block   | IBANs (mod-97 checksum, length per country from the SWIFT registry)                     |
 | `card`            | block   | payment card numbers (Luhn, 13 to 19 digits, Visa/Mastercard/Amex/Troy/MIR/UnionPay/JCB prefixes) |
 | `secret`          | block   | private keys, AWS, OpenAI/Anthropic, GitHub, GitLab, Slack, Google, Stripe, npm, PyPI, Hugging Face, SendGrid, Telegram and Azure tokens, JWTs, credentials inside URLs and `Authorization` headers |
@@ -110,7 +111,7 @@ Local file writes and reads honour `allow_paths`, so your synthetic test fixture
   an MCP server, or a file attached with `@` reach the model unseen. The `read` rule covers the
   agents' file-read tools only. Control the rest with least-privilege database accounts, masked views
   and the agents' permission settings.
-- **It is pattern based.** It finds checksum-valid identifiers (TR, ES, IT, NL, PL, SE), IBANs, cards, known secret formats
+- **It is pattern based.** It finds checksum-valid identifiers (TR, ES, IT, NL, PL, SE, BE), IBANs, cards, known secret formats
   and heuristic e-mail and phone numbers. It does not find names, addresses or diagnoses in free text.
   SQL rules match column and table names; renamed columns in a view can pass.
 - **It is not a sandbox.** A determined agent can write a script that uploads a file and then run it;

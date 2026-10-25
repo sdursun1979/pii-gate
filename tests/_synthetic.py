@@ -73,6 +73,13 @@ def pesel(digits10: str) -> str:
     return digits10 + str((10 - total % 10) % 10)
 
 
+def be_rrn(digits9: str, born_2000_or_later: bool = False) -> str:
+    """Nine digits (YYMMDD plus a three-digit serial) plus the two check digits: 97 - (n mod 97),
+    with a 2 in front of n for people born in 2000 or later."""
+    n = int(("2" if born_2000_or_later else "") + digits9)
+    return digits9 + f"{97 - n % 97:02d}"
+
+
 def personnummer(digits9: str) -> str:
     """Nine digits (YYMMDD plus three serial digits) plus the Luhn digit, as the ten digits without separator."""
     total = 0
@@ -97,6 +104,11 @@ _SAM = personnummer("900161123")
 SAMORDNING_A = _SAM[:6] + "-" + _SAM[6:]         # coordination number: day 1 + 60
 _BAD = personnummer("901301123")
 PNR_BAD_DATE = _BAD[:6] + "-" + _BAD[6:]         # month 13
+RRN_A = be_rrn("900101123")                      # 1 January 1990, serial 123
+RRN_DOTTED = f"{RRN_A[0:2]}.{RRN_A[2:4]}.{RRN_A[4:6]}-{RRN_A[6:9]}.{RRN_A[9:]}"
+RRN_2000 = be_rrn("050101123", born_2000_or_later=True)   # 1 January 2005
+RRN_BIS = be_rrn("902101123")                    # bis number: month + 20
+RRN_BAD_DATE = be_rrn("901301123")               # month 13
 
 
 # --------------------------------------------------------------------------- formatting helpers

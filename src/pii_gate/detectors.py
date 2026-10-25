@@ -175,8 +175,9 @@ def find_it_cf(text: str, allow: Iterable[str] = ()) -> Iterator[Finding]:
         yield Finding("it-cf", m.start(), m.end(), mask(s), "Italian codice fiscale, check character valid")
 
 
-# Nine and eleven digit numbers are everywhere (orders, phones), and the BSN, PESEL and personnummer checks are
-# weak enough that a random number passes often. These three are matched only next to their label.
+# Nine and eleven digit numbers are everywhere (orders, phones), and the BSN, PESEL, personnummer and Belgian
+# register number checks are weak enough that a random number passes often. These are matched only next to
+# their label.
 _LABEL_WINDOW = 40
 _BSN = re.compile(r"\d(?<!\d\d)\d{8}(?!\d)")
 _BSN_LABEL = re.compile(r"(?i)\b(?:bsn|burgerservicenummer|sofi(?:nummer)?)\b")
@@ -184,6 +185,9 @@ _PESEL = re.compile(r"\d(?<!\d\d)\d{10}(?!\d)")
 _PESEL_LABEL = re.compile(r"(?i)\bpesel\b")
 _SE_PNR = re.compile(r"(?<!\d)(\d{6})([-+]?)(\d{4})(?!\d)")
 _SE_PNR_LABEL = re.compile(r"(?i)\b(?:personnummer|samordningsnummer)\b")
+_BE_RRN = re.compile(r"(?<!\d)\d{2}\.?\d{2}\.?\d{2}[-.]?\d{3}\.?\d{2}(?!\d)")
+_BE_RRN_LABEL = re.compile(
+    r"(?i)\b(?:rijksregisternummer|rijksregister|registre\s+national|niss|insz|national\s+register\s+number)\b")
 
 
 def _labelled(label: "re.Pattern[str]", text: str, start: int) -> bool:
@@ -253,6 +257,32 @@ def se_personnummer_valid(s: str, sep: str = "-") -> bool:
         except ValueError:
             continue
     return False
+
+
+def be_rrn_valid(s: str) -> bool:
+    """Belgian national register number (NISS / INSZ): YYMMDD, a three-digit serial, two check digits.
+
+    The check is 97 minus the first nine digits mod 97; for people born in 2000 or later a 2 is put in
+    front of the nine digits first, and either form is accepted because the two-digit year does not say
+    which applies. A month or day of 00 means it is not known, and a bis number adds 20 or 40 to the month.
+    """
+    if len(s) != 11 or not s.isdigit() or len(set(s)) == 1:
+        return False
+    month, day = int(s[2:4]), int(s[4:6])
+    if month >= 60 or month % 20 > 12 or day > 31:
+        return False
+    base = int(s[:9])
+    return int(s[9:]) in (97 - base % 97, 97 - (2_000_000_000 + base) % 97)
+
+
+def find_be_rrn(text: str, allow: Iterable[str] = ()) -> Iterator[Finding]:
+    for m in _BE_RRN.finditer(text):
+        s = m.group().replace(".", "").replace("-", "")
+        if m.group() in allow or s in allow or not be_rrn_valid(s):
+            continue
+        if _labelled(_BE_RRN_LABEL, text, m.start()):
+            yield Finding("be-rrn", m.start(), m.end(), mask(m.group()),
+                          "Belgian national register number next to its label, check digits valid")
 
 
 def find_se_personnummer(text: str, allow: Iterable[str] = ()) -> Iterator[Finding]:
@@ -609,6 +639,7 @@ def _find_pii(text: str, allow: Iterable[str], allow_domains: Iterable[str]) -> 
     yield from find_nl_bsn(text, allow)
     yield from find_pl_pesel(text, allow)
     yield from find_se_personnummer(text, allow)
+    yield from find_be_rrn(text, allow)
     yield from find_iban(text, allow)
     yield from find_card(text, allow)
     yield from find_email(text, allow, allow_domains)

@@ -1,3 +1,4 @@
+import time
 import unittest
 
 from pii_gate import detectors as d
@@ -212,6 +213,43 @@ class SwedishPersonnummerTests(unittest.TestCase):
         self.assertNotIn(syn.PNR_A, rep.blocking[0].sample)
         for col in ("personnummer", "samordningsnummer"):
             self.assertEqual(list(Engine().scan_text(f"SELECT {col} FROM orders").counts()), ["sql-pii"], col)
+
+
+class BelgianRegisterNumberTests(unittest.TestCase):
+    def test_algorithm_matches_published_examples(self):
+        # The worked examples on the French Wikipedia page "Numéro de registre national".
+        self.assertTrue(d.be_rrn_valid("85073003328"))   # born 1985: 97 - 850730033 mod 97
+        self.assertTrue(d.be_rrn_valid("17073003384"))   # born after 1999: 97 - 2170730033 mod 97
+
+    def test_found_only_next_to_its_label(self):
+        for label in ("rijksregisternummer", "Numéro de registre national", "NISS", "INSZ nr",
+                      "national register number"):
+            self.assertEqual(rules(d.find_be_rrn(f"{label}: {syn.RRN_A}")), ["be-rrn"], label)
+        self.assertEqual(list(d.find_be_rrn(syn.RRN_A)), [])
+        self.assertEqual(list(d.find_be_rrn(f"order {syn.RRN_A} shipped")), [])
+
+    def test_written_forms_born_after_1999_and_bis_numbers(self):
+        for value in (syn.RRN_DOTTED, syn.RRN_2000, syn.RRN_BIS):
+            self.assertEqual(rules(d.find_be_rrn(f"NISS {value}")), ["be-rrn"], value)
+
+    def test_bad_check_bad_date_and_turkish_phone_are_ignored(self):
+        broken = syn.RRN_A[:-1] + str((int(syn.RRN_A[-1]) + 1) % 10)
+        for text in (f"NISS {broken}", f"NISS {syn.RRN_BAD_DATE}", "NISS 05321234567", "NISS 00000000000"):
+            self.assertEqual(list(d.find_be_rrn(text)), [], text)
+
+    def test_blocks_by_default_masks_the_value_and_is_a_sql_column(self):
+        from pii_gate.engine import Engine
+        rep = Engine().scan_text(f"rijksregisternummer {syn.RRN_DOTTED}")
+        self.assertEqual(list(rep.counts()), ["be-rrn"])
+        self.assertNotIn(syn.RRN_DOTTED, rep.blocking[0].sample)
+        for col in ("rijksregisternummer", "niss", "insz"):
+            self.assertEqual(list(Engine().scan_text(f"SELECT {col} FROM orders").counts()), ["sql-pii"], col)
+
+    def test_is_linear(self):
+        t0 = time.perf_counter()
+        list(d.find_be_rrn("NISS " + "12.34.56-" * 100000))
+        list(d.find_be_rrn("NISS " + "1" * 1_000_000))
+        self.assertLess(time.perf_counter() - t0, 1.0)
 
 
 class NationalIdEngineTests(unittest.TestCase):
