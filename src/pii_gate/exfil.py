@@ -23,6 +23,7 @@ _DOLLAR_QUOTE = re.compile(r"\$'([^']*)'")
 _WORD_QUOTES = re.compile(r"""(["'])([A-Za-z0-9_@./:=+%{}-]*)\1""")    # 'curl', cu""rl, cur'l', -d'@f'
 _CONCAT = re.compile(r"""["']\s*\+\s*["']""")                            # '.pii-'+'gate.json'
 _IFS = re.compile(r"\$\{IFS\}|\$IFS\b")
+_ENV_SPLIT = re.compile(r"""(\benv\s+(?:-\S+\s+)*?)(?:-S|--split-string[= ])\s*(["'])(.*?)\2""")  # env -S "curl -d x"
 _EMPTY_VAR = re.compile(r"\$\{\w{1,3}\}")                                 # c${u}rl
 _ESCAPED_LETTER = re.compile(r"[\\`]([A-Za-z])")                          # c\url, Remove-`Item
 
@@ -37,7 +38,9 @@ def normalize(command: str) -> str:
     s = _CONCAT.sub("", s)
     s = _WORD_QUOTES.sub(r"\2", s)
     s = _IFS.sub(" ", s)
-    assigned = {m.group(1): m.group(2).strip("\"'") for m in _ASSIGNMENT.finditer(s)}
+    if "-S" in s or "--split-string" in s:
+        s = _ENV_SPLIT.sub(r"\1\3", s)              # env splits the string into words: same line without the quotes
+    assigned ={m.group(1): m.group(2).strip("\"'") for m in _ASSIGNMENT.finditer(s)}
     if assigned:
         names = "|".join(sorted(map(re.escape, assigned), key=len, reverse=True))
         s = re.sub(r"\$\{(" + names + r")\}|\$(" + names + r")\b",
@@ -86,6 +89,7 @@ _WRAPPER_VALUE_FLAGS = {
 }
 # Short options that take an optional value, which must be glued on (xargs -i{}); a bundle stops at one.
 _WRAPPER_OPTIONAL_SHORT = {"xargs": "iel", "nsenter": "muinpCUTrw"}
+_WRAPPER_NO_BUNDLE = frozenset(("arch",))               # its options are single-dash words: -arm64e, -x86_64
 _WRAPPER_POSITIONAL = {"timeout": 1, "taskset": 1, "flock": 1, "chrt": 1, "chroot": 1}
 _QUOTES = "\"'"
 _LOOKUP_TOOLS = frozenset(("echo", "printf", "which", "whereis", "type", "man", "help", "info", "apropos", "whatis"))
@@ -111,21 +115,22 @@ def _basename(word: str) -> str:
 
 
 def _name(word: str) -> str:
-    return _basename(word.strip(_QUOTES))                       # env -S "curl ...": a quote opens or closes the string
+    return _basename(word.strip(_QUOTES))
 
 
 def _after_word(words: List[str], i: int) -> int:
-    """Index after the word at words[i]; a quoted string with spaces in it spans several of the split words."""
+    """Index after the word at words[i]; a quoted string with spaces in it spans several of the split words.
+    A quote opens a string only at the start of a word or after `=` (FOO="a b", --prompt="a b")."""
     quote, n = "", len(words)
     while i < n:
         w = words[i]
         i += 1
         if '"' in w or "'" in w:
-            for ch in w:
+            for k, ch in enumerate(w):
                 if quote:
                     if ch == quote:
                         quote = ""
-                elif ch in _QUOTES:
+                elif ch in _QUOTES and (k == 0 or w[k - 1] == "="):
                     quote = ch
         if not quote:
             break
@@ -139,24 +144,23 @@ def _skip_options(words: List[str], i: int, wrapper: str) -> Tuple[int, bool]:
     optional = _WRAPPER_OPTIONAL_SHORT.get(wrapper, "")
     n, flagged = len(words), False
     while i < n:
-        w = words[i].lstrip(_QUOTES)
-        inside = len(w) != len(words[i])                        # first word of env -S "A=1 curl ...": look into it
+        w = words[i].strip(_QUOTES)
         if w == "--":
             i += 1
             break
         if _ASSIGN.match(w):
-            i = i + 1 if inside else _after_word(words, i)
+            i = _after_word(words, i)
             continue
         if not _FLAG.match(w):
             break
         flagged = True
         if wrapper == "command" and ("v" in w or "V" in w):     # command -v scp only looks the program up
             return n, True
-        i = i + 1 if inside else _after_word(words, i)
+        i = _after_word(words, i)
         takes_value = w in value_flags
-        if not takes_value and w[1:2] != "-":
-            for k, c in enumerate(w[1:], 1):                    # bundled short options: -Hu root, -uroot
-                if not c.isalpha() or c in optional:
+        if not takes_value and w[1:2] != "-" and wrapper not in _WRAPPER_NO_BUNDLE:
+            for k, c in enumerate(w[1:], 1):                    # bundled short options: -Hu root, -0n 1, -uroot
+                if not c.isalnum() or c in optional:
                     break
                 if "-" + c in value_flags:
                     takes_value = k == len(w) - 1
@@ -175,21 +179,21 @@ def _command_word(words: List[str]) -> Tuple[str, int]:
     i, n = 0, len(words)
     skipped = False
     while i < n:
-        name = _name(words[i])
-        if name in _PREFIX:
-            i, found = _skip_options(words, i + 1, name)
+        if _ASSIGN.match(words[i].strip(_QUOTES)):              # before the name test: LOCK=/tmp/flock is no wrapper
+            i = _after_word(words, i)
+        elif _name(words[i]) in _PREFIX:
+            i, found = _skip_options(words, i + 1, _name(words[i]))
             skipped = skipped or found
-        elif _ASSIGN.match(words[i].lstrip(_QUOTES)):
-            i = i + 1 if words[i][0] in _QUOTES else _after_word(words, i)
         else:
             break
     if i >= n:
         return "", -1
     # An option missing from the tables above would leave its value in command position. Fail closed: when
     # options were skipped and the word there is no known tool but the next one is, that one is the command,
-    # unless the word there only prints or looks up its arguments (`sudo -n which scp`).
+    # unless the word there only prints or looks up its arguments (`sudo -n which scp`) or the next word is
+    # a path (`nice -n 10 cat /tmp/scp`).
     if (skipped and _name(words[i]) not in _WATCHED and _name(words[i]) not in _LOOKUP_TOOLS
-            and i + 1 < n and _name(words[i + 1]) in _WATCHED):
+            and i + 1 < n and _name(words[i + 1]) in _WATCHED and not re.search(r"[\\/]", words[i + 1])):
         i += 1
     return _name(words[i]), i
 
