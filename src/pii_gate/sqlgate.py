@@ -30,6 +30,7 @@ CORE_COLUMNS: Set[str] = {
     "fingerprint", "genetic", "blood_type", "kan_grubu",
     "dni", "nie", "nif", "codice_fiscale", "codicefiscale", "bsn", "burgerservicenummer", "pesel",
     "personnummer", "samordningsnummer", "rijksregisternummer", "niss", "insz",
+    "nir", "numero_securite_sociale", "securite_sociale", "num_secu", "numero_secu", "no_secu",
 }
 CONTEXT_COLUMNS: Set[str] = {
     "first_name", "firstname", "last_name", "lastname", "surname", "full_name", "fullname", "name",

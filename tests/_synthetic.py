@@ -80,6 +80,13 @@ def be_rrn(digits9: str, born_2000_or_later: bool = False) -> str:
     return digits9 + f"{97 - n % 97:02d}"
 
 
+def nir(first13: str) -> str:
+    """Thirteen characters (sex, YYMM, department, commune, order number) plus the key: 97 - (n mod 97),
+    with Corsica's 2A and 2B counted as 19 and 18."""
+    n = int(first13[:5] + {"2A": "19", "2B": "18"}.get(first13[5:7], first13[5:7]) + first13[7:])
+    return first13 + f"{97 - n % 97:02d}"
+
+
 def personnummer(digits9: str) -> str:
     """Nine digits (YYMMDD plus three serial digits) plus the Luhn digit, as the ten digits without separator."""
     total = 0
@@ -111,6 +118,23 @@ RRN_BIS = be_rrn("902101123")                    # bis number: month + 20
 RRN_BAD_DATE = be_rrn("901301123")               # month 13
 RRN_SPACED = " ".join((RRN_A[0:2], RRN_A[2:4], RRN_A[4:6], RRN_A[6:9], RRN_A[9:]))   # YY MM DD SSS CC
 PNR_12 = "19" + PNR_A                            # twelve-digit form YYYYMMDD-NNNC
+NIR_A = nir("1900175123456")                     # male, January 1990, Paris (75) commune 123: no such commune
+NIR_SPACED = " ".join((NIR_A[0], NIR_A[1:3], NIR_A[3:5], NIR_A[5:7], NIR_A[7:10], NIR_A[10:13], NIR_A[13:]))
+NIR_KEY_APART = NIR_A[:13] + " " + NIR_A[13:]
+NIR_DOTTED = NIR_SPACED.replace(" ", ".")
+NIR_DASHED = NIR_SPACED.replace(" ", "-")
+NIR_2A = nir("290012A901456")                    # female, Corse-du-Sud commune 901: no such commune
+NIR_2B = nir("290012B901456")                    # Haute-Corse
+NIR_OVERSEAS = nir("1900197188345")              # Guadeloupe (971) commune 88: no such commune
+NIR_OVERSEAS_SPACED = " ".join((NIR_OVERSEAS[0], NIR_OVERSEAS[1:3], NIR_OVERSEAS[3:5], NIR_OVERSEAS[5:8],
+                                NIR_OVERSEAS[8:10], NIR_OVERSEAS[10:13], NIR_OVERSEAS[13:]))
+NIR_PENDING = nir("7900175123456")               # temporary registration (sex digit 7)
+NIR_MONTH_UNKNOWN = nir("1902075123456")         # fictitious month 20
+NIR_BAD_MONTH = nir("1901475123456")             # month 14 is not used
+NIR_BAD_ORDER = nir("1900175123000")             # order number 000
+NIR_BAD_DEPARTMENT = nir("1900100123456")        # department 00
+NIR_BAD_COMMUNE = nir("1900175000456")           # commune 000
+NIR_OVERSEAS_BAD_COMMUNE = nir("1900197100345")  # overseas commune 00
 
 
 # --------------------------------------------------------------------------- formatting helpers

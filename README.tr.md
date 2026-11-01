@@ -46,6 +46,7 @@ sonra `/hooks` adımını tekrarlayın. Tek bir depoya kurmak için `--project` 
 | `pl-pesel`        | engel      | Polonya PESEL (sağlama ve doğum tarihi), yalnız `PESEL` etiketinin yanında |
 | `se-personnummer` | engel      | İsveç personnummer / samordningsnummer (Luhn ve doğum tarihi), yalnız `personnummer` veya `samordningsnummer` etiketinin yanında |
 | `be-rrn`          | engel      | Belçika ulusal sicil numarası / NISS / INSZ (mod 97 ve doğum tarihi), yalnız `rijksregisternummer`, `registre national`, `NISS` veya `INSZ` etiketinin yanında |
+| `fr-nir`          | engel      | Fransa sosyal güvenlik numarası / NIR (mod 97 anahtarı, Korsika `2A`/`2B`, cinsiyet, ay, bölge, belde, sıra numarası; bitişik, anahtar ayrı ya da boşluk, nokta veya tireyle gruplu), yalnız `NIR`, `NIRPP`, `NSS`, `sécurité sociale`, `sécu`, `INSEE`, `carte Vitale` veya `social security` etiketinin yanında (`num_secu` gibi alan adları dahil) |
 | `iban`            | engel      | IBAN (mod-97 ve SWIFT kayıt defterindeki ülke uzunluğu)                   |
 | `card`            | engel      | Kart numarası (Luhn; Visa, Mastercard, Amex, Troy, MIR, UnionPay, JCB)     |
 | `secret`          | engel      | Özel anahtarlar; AWS, OpenAI/Anthropic, GitHub, GitLab, Slack, Google, Stripe, npm, PyPI, Hugging Face, SendGrid, Telegram, Azure anahtarları; JWT; URL içindeki ve `Authorization` başlığındaki parolalar |
