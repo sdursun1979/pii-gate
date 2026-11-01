@@ -292,6 +292,84 @@ class BelgianRegisterNumberTests(unittest.TestCase):
         self.assertLess(time.perf_counter() - t0, 1.0)
 
 
+class FrenchNirTests(unittest.TestCase):
+    def test_corsica_key_matches_both_published_methods(self):
+        # fr.wikipedia "Numéro de sécurité sociale en France": 2A / 2B count as 19 / 18, or A and B as 0 with
+        # 1 000 000 / 2 000 000 taken off the number.
+        for value, offset in ((syn.NIR_2A, 1_000_000), (syn.NIR_2B, 2_000_000)):
+            n = int(value[:13].replace("A", "0").replace("B", "0")) - offset
+            self.assertEqual(int(value[13:]), 97 - n % 97, value)
+            self.assertTrue(d.fr_nir_valid(value), value)
+        naive = syn.NIR_2A[:13] + f"{97 - int(syn.NIR_2A[:13].replace('A', '0')) % 97:02d}"   # 2A as 20
+        self.assertFalse(d.fr_nir_valid(naive))
+
+    def test_found_only_next_to_its_label(self):
+        for label in ("NIR", "numéro de sécurité sociale", "N° de sécu", "SECURITE SOCIALE", "numéro INSEE",
+                      "carte Vitale n°", "NSS", "French social security number"):
+            self.assertEqual(rules(d.find_fr_nir(f"{label}: {syn.NIR_A}")), ["fr-nir"], label)
+        for key in ("numero_securite_sociale", "num_secu", "numSecu", "noSecu", "numeroSecuriteSociale",
+                    "carte_vitale", "nir_patient", "NIRPP"):
+            self.assertEqual(rules(d.find_fr_nir(f'{{"{key}": "{syn.NIR_A}"}}')), ["fr-nir"], key)
+        for text in (syn.NIR_A, f"order {syn.NIR_A} shipped", f"nirvana {syn.NIR_A}",
+                     f"code de sécurité {syn.NIR_A}", f"libnss {syn.NIR_A}"):
+            self.assertEqual(list(d.find_fr_nir(text)), [], text)
+
+    def test_written_forms_corsica_overseas_pending_and_unknown_month(self):
+        for value in (syn.NIR_SPACED, syn.NIR_DOTTED, syn.NIR_DASHED, syn.NIR_KEY_APART,
+                      syn.NIR_KEY_APART.replace(" ", "-"), syn.NIR_2A, syn.NIR_2A.lower(), syn.NIR_2B,
+                      syn.NIR_OVERSEAS, syn.NIR_OVERSEAS_SPACED, syn.NIR_PENDING, syn.NIR_MONTH_UNKNOWN):
+            found = list(d.find_fr_nir(f"NIR {value}"))
+            self.assertEqual(rules(found), ["fr-nir"], value)
+            self.assertEqual(found[0].sample, value[0] + "***")
+
+    def test_inside_a_longer_run_is_ignored(self):
+        for text in (f"NIR 9{syn.NIR_A}", f"NIR {syn.NIR_A}9", f"NIR 12 {syn.NIR_SPACED}",
+                     f"NIR {syn.NIR_SPACED} 12", f"NIR 12 {syn.NIR_KEY_APART}", f"NIR {syn.NIR_KEY_APART} 12",
+                     f"NIR {syn.NIR_DOTTED}.12", f"NIR 12-{syn.NIR_DASHED}",
+                     "NIR " + syn.NIR_SPACED.replace(" ", ".", 1),                              # mixed separators
+                     "NIR " + syn.NIR_DASHED.replace("-", " ", 1)):
+            self.assertEqual(list(d.find_fr_nir(text)), [], text)
+
+    def test_bad_key_month_department_commune_order_and_sex_digit_are_ignored(self):
+        broken = syn.NIR_A[:-1] + str((int(syn.NIR_A[-1]) + 1) % 10)
+        for value in (broken, syn.NIR_BAD_MONTH, syn.NIR_BAD_ORDER, syn.NIR_BAD_DEPARTMENT,
+                      syn.NIR_BAD_COMMUNE, syn.NIR_OVERSEAS_BAD_COMMUNE,
+                      syn.nir("5900175123456"), syn.NIR_A[:5] + "2C" + syn.NIR_A[7:],
+                      "000000000000000"):
+            self.assertEqual(list(d.find_fr_nir(f"NIR {value}")), [], value)
+            self.assertFalse(d.fr_nir_valid(value.replace(" ", "")), value)
+
+    def test_zero_of_another_script_is_still_zero(self):
+        arabic_indic_zero = "٠"
+        self.assertEqual(rules(d.find_pii("NIR " + syn.NIR_A.replace("0", arabic_indic_zero))), ["fr-nir"])
+        self.assertEqual(list(d.find_pii("NIR " + syn.NIR_BAD_DEPARTMENT.replace("0", arabic_indic_zero))), [])
+        self.assertFalse(d.fr_nir_valid(syn.NIR_A[:13] + "²" + syn.NIR_A[14]))   # superscript: no crash
+
+    def test_allowlist(self):
+        self.assertEqual(list(d.find_fr_nir(f"NIR {syn.NIR_A}", allow={syn.NIR_A})), [])
+        self.assertEqual(list(d.find_fr_nir(f"NIR {syn.NIR_SPACED}", allow={syn.NIR_SPACED})), [])
+
+    def test_blocks_by_default_masks_the_value_and_is_a_sql_column(self):
+        from pii_gate.engine import Engine
+        rep = Engine().scan_text(f"numéro de sécurité sociale : {syn.NIR_SPACED}")
+        self.assertEqual(list(rep.counts()), ["fr-nir"])
+        self.assertNotIn(syn.NIR_SPACED, rep.blocking[0].sample)
+        for col in ("nir", "numero_securite_sociale", "securite_sociale", "num_secu", "numero_secu", "no_secu",
+                    "numSecu"):
+            self.assertEqual(list(Engine().scan_text(f"SELECT {col} FROM orders").counts()), ["sql-pii"], col)
+
+    def test_is_linear(self):
+        t0 = time.perf_counter()
+        list(d.find_fr_nir("NIR " + "1" * 1_000_000))
+        list(d.find_fr_nir("NIR " + "1 90 01 " * 100000))
+        list(d.find_fr_nir("NIR " + "1.90.01." * 100000))
+        list(d.find_fr_nir("NIR " + "1-" * 400000))
+        list(d.find_fr_nir("NIR " + "12A" * 300000))
+        list(d.find_fr_nir("NIR " + "12 " * 300000))
+        list(d.find_fr_nir("NIR " + "1900175123456 " * 50000))
+        self.assertLess(time.perf_counter() - t0, 1.0)
+
+
 class NationalIdEngineTests(unittest.TestCase):
     def test_new_rules_block_by_default_and_can_be_turned_off(self):
         from pii_gate.config import parse

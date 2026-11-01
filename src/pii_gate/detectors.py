@@ -182,9 +182,9 @@ def find_it_cf(text: str, allow: Iterable[str] = ()) -> Iterator[Finding]:
         yield Finding("it-cf", m.start(), m.end(), mask(s), "Italian codice fiscale, check character valid")
 
 
-# Nine and eleven digit numbers are everywhere (orders, phones), and the BSN, PESEL, personnummer and Belgian
-# register number checks are weak enough that a random number passes often. These are matched only next to
-# their label.
+# Nine to fifteen digit numbers are everywhere (orders, phones), and the BSN, PESEL, personnummer, Belgian
+# register number and French NIR checks are weak enough that a random number passes often. These are matched
+# only next to their label.
 _LABEL_WINDOW = 40
 _BSN = re.compile(r"\d(?<!\d\d)\d{8}(?!\d)")
 _BSN_LABEL = re.compile(r"(?i)\b(?:bsn|burgerservicenummer|sofi(?:nummer)?)\b")
@@ -198,6 +198,19 @@ _BE_RRN = re.compile(r"(?=\d)(?<!\d)(?:\d{2}\.?\d{2}\.?\d{2}[-.]?\d{3}\.?\d{2}"
                      r"|(?<!\d )\d\d \d\d \d\d \d{3} \d\d(?! \d))(?!\d)")
 _BE_RRN_LABEL = re.compile(
     r"(?i)\b(?:rijksregisternummer|rijksregister|registre\s+national|niss|insz|national\s+register\s+number)\b")
+# S YY MM DD CCC OOO KK: compact, with the key apart (S YYMMDDCCCOOO KK) or in groups split by one separator
+# throughout, spaces as on the Carte Vitale, dots or dashes. Corsica writes the department as 2A / 2B; an
+# overseas department (97x, 98x) takes three digits and leaves two for the commune. A run that goes on with
+# more digit groups is part of something else.
+_FR_NIR = re.compile(r"(?=[1-478])(?<!\d)(?:[1-478]\d{4}(?:\d\d|2[ABab])\d{6}\d\d"
+                     r"|(?<!\d[ .-])[1-478]\d{4}(?:\d\d|2[ABab])\d{6}[ -]\d\d(?![ .-]\d)"
+                     r"|(?<!\d[ .-])[1-478]([ .-])\d\d\1\d\d\1(?:\d\d\1\d{3}|2[ABab]\1\d{3}|9[78]\d\1\d\d)\1\d{3}\1\d\d"
+                     r"(?![ .-]\d))(?!\d)")
+# An underscore separates words here, and numSecu / noSecu are one word, so key names such as num_secu,
+# numeroSecuriteSociale or carte_vitale count as labels too.
+_FR_NIR_LABEL = re.compile(
+    r"(?i)(?<![^\W_])(?:nir(?:pp)?|nss|insee|carte[\s_-]*vitale|social[\s_-]*security"
+    r"|(?:num(?:[ée]ro)?|no)?s[ée]cu(?:rit[ée][\s_-]*sociale)?)(?![^\W_])")
 
 
 def _labelled(label: "re.Pattern[str]", text: str, start: int) -> bool:
@@ -300,6 +313,38 @@ def find_be_rrn(text: str, allow: Iterable[str] = ()) -> Iterator[Finding]:
         if _labelled(_BE_RRN_LABEL, text, m.start()):
             yield Finding("be-rrn", m.start(), m.end(), mask(m.group()),
                           "Belgian national register number next to its label, check digits valid")
+
+
+def fr_nir_valid(s: str) -> bool:
+    """French social security number (NIR): sex, YYMM, department, commune, order number, two key digits.
+
+    The key is 97 minus the first thirteen digits mod 97, with Corsica's 2A and 2B counted as 19 and 18. The
+    sex digit is 1 or 2, or 3, 4, 7 or 8 while a registration is pending. A month of 13, 20 to 42 or 50 and
+    above stands for one that is not known; months 00, 14 to 19 and 43 to 49, department 00, commune 000
+    (00 overseas) and order number 000 are not used. Digits of other scripts count as their ASCII values.
+    """
+    s = s.upper()
+    digits = s[:5] + {"2A": "19", "2B": "18"}.get(s[5:7], s[5:7]) + s[7:]
+    if len(digits) != 15 or not digits.isdecimal():
+        return False
+    digits = "".join(str(int(c)) for c in digits)
+    commune = digits[8:10] if digits[5:7] in ("97", "98") else digits[7:10]
+    if digits[0] not in "123478" or digits[5:7] == "00" or int(commune) == 0 or digits[10:13] == "000":
+        return False
+    month = int(digits[3:5])
+    if not (1 <= month <= 13 or 20 <= month <= 42 or month >= 50):
+        return False
+    return int(digits[13:]) == 97 - int(digits[:13]) % 97
+
+
+def find_fr_nir(text: str, allow: Iterable[str] = ()) -> Iterator[Finding]:
+    for m in _FR_NIR.finditer(text):
+        s = m.group().replace(".", "").replace("-", "").replace(" ", "").upper()
+        if s in WELL_KNOWN_TEST_VALUES or m.group() in allow or s in allow or not fr_nir_valid(s):
+            continue
+        if _labelled(_FR_NIR_LABEL, text, m.start()):
+            yield Finding("fr-nir", m.start(), m.end(), mask(m.group()),
+                          "French social security number (NIR) next to its label, key valid")
 
 
 def find_se_personnummer(text: str, allow: Iterable[str] = ()) -> Iterator[Finding]:
@@ -722,6 +767,7 @@ def _find_pii(text: str, allow: Iterable[str], allow_domains: Iterable[str]) -> 
     yield from find_pl_pesel(text, allow)
     yield from find_se_personnummer(text, allow)
     yield from find_be_rrn(text, allow)
+    yield from find_fr_nir(text, allow)
     yield from find_iban(text, allow)
     yield from find_card(text, allow)
     yield from find_email(text, allow, allow_domains)

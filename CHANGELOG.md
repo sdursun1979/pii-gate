@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **French social security number** (`fr-nir`, NIR): the mod 97 key verified, with Corsica's `2A` and
+  `2B` counted as 19 and 18; the sex digit (including pending registrations), the month (including the
+  codes for a month that is not known), the department, the commune and the order number checked;
+  written compact, with the key apart, or in groups split by spaces (as on the Carte Vitale), dots or
+  dashes, overseas departments included. Fifteen-digit numbers are common and the key passes one random
+  number in 97, so it is matched only next to a `NIR`, `NIRPP`, `NSS`, `sécurité sociale`, `sécu`,
+  `INSEE`, `carte Vitale` or `social security` label, also when the label is a key name such as
+  `num_secu` or `numeroSecuriteSociale`. `nir`, `numero_securite_sociale`, `securite_sociale`,
+  `num_secu`, `numero_secu` and `no_secu` are core SQL columns (#4).
+
 ## 0.3.1 (2026-10-25)
 
 Follow-up to an independent audit of 0.3.0 (synthetic data only, all findings reproduced before fixing).
