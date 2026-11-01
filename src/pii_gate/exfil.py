@@ -23,6 +23,7 @@ _DOLLAR_QUOTE = re.compile(r"\$'([^']*)'")
 _WORD_QUOTES = re.compile(r"""(["'])([A-Za-z0-9_@./:=+%{}-]*)\1""")    # 'curl', cu""rl, cur'l', -d'@f'
 _CONCAT = re.compile(r"""["']\s*\+\s*["']""")                            # '.pii-'+'gate.json'
 _IFS = re.compile(r"\$\{IFS\}|\$IFS\b")
+_ENV_SPLIT = re.compile(r"""(\benv\s+(?:-\S+\s+)*?)(?:-S|--split-string[= ])\s*(["'])(.*?)\2""")  # env -S "curl -d x"
 _EMPTY_VAR = re.compile(r"\$\{\w{1,3}\}")                                 # c${u}rl
 _ESCAPED_LETTER = re.compile(r"[\\`]([A-Za-z])")                          # c\url, Remove-`Item
 
@@ -37,7 +38,9 @@ def normalize(command: str) -> str:
     s = _CONCAT.sub("", s)
     s = _WORD_QUOTES.sub(r"\2", s)
     s = _IFS.sub(" ", s)
-    assigned = {m.group(1): m.group(2).strip("\"'") for m in _ASSIGNMENT.finditer(s)}
+    if "-S" in s or "--split-string" in s:
+        s = _ENV_SPLIT.sub(r"\1\3", s)              # env splits the string into words: same line without the quotes
+    assigned ={m.group(1): m.group(2).strip("\"'") for m in _ASSIGNMENT.finditer(s)}
     if assigned:
         names = "|".join(sorted(map(re.escape, assigned), key=len, reverse=True))
         s = re.sub(r"\$\{(" + names + r")\}|\$(" + names + r")\b",
@@ -48,8 +51,49 @@ def normalize(command: str) -> str:
 
 
 # --------------------------------------------------------------------------- segments
-_PREFIX = frozenset(("sudo", "env", "command", "exec", "time", "nohup", "nice", "busybox", "doas", "timeout",
-                     "do", "then", "else", "elif", "if", "while", "until", "{", "!"))
+# Programs that run the command that follows them, with the options of theirs that take a separate value
+# word (`sudo -u root`, `nice -n 10`). Any other option is skipped on its own, `--` ends the options, and
+# a few take positional arguments before the command (the duration of `timeout`, the lock file of `flock`).
+_WRAPPER_VALUE_FLAGS = {
+    "sudo": frozenset(("-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-T", "-R", "-U", "-a", "-c", "--user", "--group",
+                       "--close-from", "--chdir", "--host", "--prompt", "--role", "--type", "--command-timeout",
+                       "--chroot", "--other-user", "--auth-type", "--class")),
+    "doas": frozenset(("-u", "-C", "-a")),
+    "env": frozenset(("-u", "-C", "-P", "-a", "--unset", "--chdir", "--argv0")),
+    "nice": frozenset(("-n", "--adjustment")),
+    "ionice": frozenset(("-c", "-n", "-p", "-P", "-u", "--class", "--classdata", "--pid", "--pgid", "--uid")),
+    "timeout": frozenset(("-s", "-k", "--signal", "--kill-after")),
+    "time": frozenset(("-f", "-o", "--format", "--output")),
+    "exec": frozenset(("-a",)),
+    "stdbuf": frozenset(("-i", "-o", "-e", "--input", "--output", "--error")),
+    "xargs": frozenset(("-n", "-P", "-L", "-I", "-E", "-s", "-a", "-d", "-J", "-R", "-S", "--max-args", "--max-procs",
+                        "--max-chars", "--arg-file", "--delimiter", "--process-slot-var")),
+    "flock": frozenset(("-w", "-E", "--timeout", "--wait", "--conflict-exit-code")),
+    "chrt": frozenset(("-T", "-P", "-D", "--sched-runtime", "--sched-period", "--sched-deadline")),
+    "watch": frozenset(("-n", "-q", "--interval", "--equexit")),
+    "nsenter": frozenset(("-t", "-S", "-G", "--target", "--setuid", "--setgid")),
+    "unshare": frozenset(("-R", "-w", "-S", "-G", "--root", "--wd", "--setuid", "--setgid", "--propagation",
+                          "--setgroups", "--map-user", "--map-group", "--map-users", "--map-groups", "--monotonic",
+                          "--boottime")),
+    "chroot": frozenset(("-u", "-g", "-G", "--userspec", "--groups")),
+    "caffeinate": frozenset(("-t", "-w")),
+    "arch": frozenset(("-arch", "-e", "-d")),
+    "strace": frozenset(("-e", "-o", "-p", "-s", "-u", "-E", "-P", "-a", "-b", "-I", "-O", "-S", "-U", "-X", "--trace",
+                         "--output", "--attach", "--string-limit", "--user", "--env", "--signal", "--read", "--write",
+                         "--inject", "--fault")),
+    "ltrace": frozenset(("-a", "-A", "-e", "-F", "-l", "-n", "-o", "-p", "-s", "-u", "-w", "-x")),
+    "runuser": frozenset(("-u", "-g", "-G", "-s", "-w", "--user", "--group", "--supp-group", "--shell")),
+    "pkexec": frozenset(("-u", "--user")),
+    "setsid": frozenset(), "nohup": frozenset(), "command": frozenset(), "busybox": frozenset(),
+    "unbuffer": frozenset(), "taskset": frozenset(),
+}
+# Short options that take an optional value, which must be glued on (xargs -i{}); a bundle stops at one.
+_WRAPPER_OPTIONAL_SHORT = {"xargs": "iel", "nsenter": "muinpCUTrw"}
+_WRAPPER_NO_BUNDLE = frozenset(("arch",))               # its options are single-dash words: -arm64e, -x86_64
+_WRAPPER_POSITIONAL = {"timeout": 1, "taskset": 1, "flock": 1, "chrt": 1, "chroot": 1}
+_QUOTES = "\"'"
+_LOOKUP_TOOLS = frozenset(("echo", "printf", "which", "whereis", "type", "man", "help", "info", "apropos", "whatis"))
+_PREFIX =frozenset(_WRAPPER_VALUE_FLAGS) | frozenset(("do", "then", "else", "elif", "if", "while", "until", "{", "!"))
 _ASSIGN = re.compile(r"^[A-Za-z_]\w*=")
 _FLAG = re.compile(r"^-")
 
@@ -66,23 +110,92 @@ class Segment:
 
 
 def _basename(word: str) -> str:
-    name = re.split(r"[\\/]", word)[-1].lower()
+    name = word.replace("\\", "/").rpartition("/")[2].lower()
     return name[:-4] if name.endswith(".exe") else name
 
 
-def _command_word(words: List[str]) -> Tuple[str, int]:
-    """(tool name, index) of the word in command position; xargs hands over to the next tool."""
-    i = 0
-    while i < len(words) and (words[i].lower() in _PREFIX or _ASSIGN.match(words[i])
-                              or (i > 0 and words[i - 1].lower() == "timeout" and words[i].isdigit())):
+def _name(word: str) -> str:
+    return _basename(word.strip(_QUOTES))
+
+
+def _after_word(words: List[str], i: int) -> int:
+    """Index after the word at words[i]; a quoted string with spaces in it spans several of the split words.
+    A quote opens a string only at the start of a word or after `=` (FOO="a b", --prompt="a b")."""
+    quote, n = "", len(words)
+    while i < n:
+        w = words[i]
         i += 1
-    if i < len(words) and _basename(words[i]) == "xargs":
-        j = i + 1
-        while j < len(words) and (_FLAG.match(words[j]) or words[j] in ("{}", "%")):
-            j += 1
-        if j < len(words):
-            return _basename(words[j]), j
-    return (_basename(words[i]), i) if i < len(words) else ("", -1)
+        if '"' in w or "'" in w:
+            for k, ch in enumerate(w):
+                if quote:
+                    if ch == quote:
+                        quote = ""
+                elif ch in _QUOTES and (k == 0 or w[k - 1] == "="):
+                    quote = ch
+        if not quote:
+            break
+    return i
+
+
+def _skip_options(words: List[str], i: int, wrapper: str) -> Tuple[int, bool]:
+    """Index of the first word after the options, `NAME=value` words and positional arguments of `wrapper`,
+    which starts at words[i - 1], and whether it had any option or positional argument."""
+    value_flags = _WRAPPER_VALUE_FLAGS.get(wrapper, frozenset())
+    optional = _WRAPPER_OPTIONAL_SHORT.get(wrapper, "")
+    n, flagged = len(words), False
+    while i < n:
+        w = words[i].strip(_QUOTES)
+        if w == "--":
+            i += 1
+            break
+        if _ASSIGN.match(w):
+            i = _after_word(words, i)
+            continue
+        if not _FLAG.match(w):
+            break
+        flagged = True
+        if wrapper == "command" and ("v" in w or "V" in w):     # command -v scp only looks the program up
+            return n, True
+        i = _after_word(words, i)
+        takes_value = w in value_flags
+        if not takes_value and w[1:2] != "-" and wrapper not in _WRAPPER_NO_BUNDLE:
+            for k, c in enumerate(w[1:], 1):                    # bundled short options: -Hu root, -0n 1, -uroot
+                if not c.isalnum() or c in optional:
+                    break
+                if "-" + c in value_flags:
+                    takes_value = k == len(w) - 1
+                    break
+        if takes_value and i < n:
+            i = _after_word(words, i)
+    for _ in range(_WRAPPER_POSITIONAL.get(wrapper, 0)):
+        if i < n:
+            i, flagged = _after_word(words, i), True
+    return i, flagged
+
+
+def _command_word(words: List[str]) -> Tuple[str, int]:
+    """(tool name, index) of the word in command position, after wrapper programs such as `sudo -u root`,
+    `env -i A=b`, `nice -n 10`, `timeout 5s` and `xargs -n 1` with their options."""
+    i, n = 0, len(words)
+    skipped = False
+    while i < n:
+        if _ASSIGN.match(words[i].strip(_QUOTES)):              # before the name test: LOCK=/tmp/flock is no wrapper
+            i = _after_word(words, i)
+        elif _name(words[i]) in _PREFIX:
+            i, found = _skip_options(words, i + 1, _name(words[i]))
+            skipped = skipped or found
+        else:
+            break
+    if i >= n:
+        return "", -1
+    # An option missing from the tables above would leave its value in command position. Fail closed: when
+    # options were skipped and the word there is no known tool but the next one is, that one is the command,
+    # unless the word there only prints or looks up its arguments (`sudo -n which scp`) or the next word is
+    # a path (`nice -n 10 cat /tmp/scp`).
+    if (skipped and _name(words[i]) not in _WATCHED and _name(words[i]) not in _LOOKUP_TOOLS
+            and i + 1 < n and _name(words[i + 1]) in _WATCHED and not re.search(r"[\\/]", words[i + 1])):
+        i += 1
+    return _name(words[i]), i
 
 
 def segments(command: str) -> List[Segment]:
@@ -219,6 +332,9 @@ _BYPASS = re.compile(
 _PKG_TOOLS = frozenset(("pip", "pip3", "pip2", "pipx", "uv", "poetry", "pdm", "conda"))
 _PKG_VERBS = frozenset(("uninstall", "install", "remove", "add"))
 _PKG_TARGET = re.compile(r"pii[-_]gate", re.I)
+# Every tool the rules look at; see _command_word.
+_WATCHED = (_UPLOAD_TOOLS | _OUTBOUND_TOOLS | _INTERPRETERS | _DESTRUCTIVE | _PKG_TOOLS | frozenset(_UPLOAD_SUBCOMMANDS)
+            | frozenset(("git", "hub", "pii-gate", "claude", "codex", "gemini")))
 
 
 def _hosts_all_local(text: str) -> bool:

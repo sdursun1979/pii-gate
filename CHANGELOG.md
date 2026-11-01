@@ -14,6 +14,19 @@
   `num_secu` or `numeroSecuriteSociale`. `nir`, `numero_securite_sociale`, `securite_sociale`,
   `num_secu`, `numero_secu` and `no_secu` are core SQL columns (#4).
 
+### Fixed
+
+- **Wrappers with options hid the command from the shell rules.** Behind `sudo -u root`, `env -i`,
+  `nice -n 10`, `timeout 5s` and the like the word in command position was the option, not the tool,
+  so an upload with `curl -d @file` or a `git push` passed. The wrappers (`sudo`, `doas`, `env`, `nice`,
+  `ionice`, `timeout`, `time`, `exec`, `command`, `nohup`, `stdbuf`, `setsid`, `unbuffer`, `taskset`,
+  `chrt`, `flock`, `watch`, `nsenter`, `unshare`, `chroot`, `caffeinate`, `arch`, `strace`, `ltrace`,
+  `busybox`, `xargs`) are now skipped together with their options, option values, bundled short options
+  and positional arguments, and recognised by file name (`/usr/bin/sudo`, `sudo.exe`). A quoted value
+  with a space in it (`FOO="a b" curl ...`, `sudo -p "Password:" curl ...`) no longer hides the command.
+  An option missing from the tables fails closed: the next word is taken as the command when it is a
+  tool the rules look at. Reported by mattabate (#11).
+
 ## 0.3.1 (2026-10-25)
 
 Follow-up to an independent audit of 0.3.0 (synthetic data only, all findings reproduced before fixing).
