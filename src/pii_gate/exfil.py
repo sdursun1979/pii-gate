@@ -20,7 +20,7 @@ from .detectors import Finding
 
 # --------------------------------------------------------------------------- normalisation
 _DOLLAR_QUOTE = re.compile(r"\$'([^']*)'")
-_WORD_QUOTES = re.compile(r"""(["'])([A-Za-z0-9_@./:=+%{}-]*)\1""")    # 'curl', cu""rl, cur'l', -d'@f'
+_WORD_QUOTES = re.compile(r"""(?<!\\)(["'])([A-Za-z0-9_@./:=+%{}-]*)\1""")    # 'curl', cu""rl, cur'l', -d'@f'; not 'it'\''s'
 _CONCAT = re.compile(r"""["']\s*\+\s*["']""")                            # '.pii-'+'gate.json'
 _IFS = re.compile(r"\$\{IFS\}|\$IFS\b")
 _ENV_SPLIT = re.compile(r"""(\benv\s+(?:-\S+\s+)*?)(?:-S|--split-string[= ])\s*(["'])(.*?)\2""")  # env -S "curl -d x"
@@ -84,6 +84,15 @@ _WRAPPER_VALUE_FLAGS = {
     "ltrace": frozenset(("-a", "-A", "-e", "-F", "-l", "-n", "-o", "-p", "-s", "-u", "-w", "-x")),
     "runuser": frozenset(("-u", "-g", "-G", "-s", "-w", "--user", "--group", "--supp-group", "--shell")),
     "pkexec": frozenset(("-u", "--user")),
+    "parallel": frozenset(("-j", "-a", "-S", "-I", "-N", "-n", "-L", "-C", "--jobs", "--arg-file", "--sshlogin",
+                           "--replace", "--max-args", "--max-lines", "--colsep", "--delimiter")),
+    "watchexec": frozenset(("-w", "-e", "-f", "-i", "-E", "-d", "--watch", "--exts", "--filter", "--ignore", "--env",
+                            "--debounce", "--shell")),
+    "systemd-run": frozenset(("-u", "-p", "-E", "--unit", "--property", "--setenv", "--uid", "--gid",
+                              "--working-directory", "--description", "--slice")),
+    "proot": frozenset(("-r", "-b", "-w", "-S", "-q", "-k")),
+    "wsl": frozenset(("-d", "-u", "--distribution", "--user", "--cd", "--shell-type")),
+    "entr": frozenset(),
     "setsid": frozenset(), "nohup": frozenset(), "command": frozenset(), "busybox": frozenset(),
     "unbuffer": frozenset(), "taskset": frozenset(),
 }
@@ -119,19 +128,26 @@ def _name(word: str) -> str:
 
 
 def _after_word(words: List[str], i: int) -> int:
-    """Index after the word at words[i]; a quoted string with spaces in it spans several of the split words.
-    A quote opens a string only at the start of a word or after `=` (FOO="a b", --prompt="a b")."""
+    """Index after the word at words[i]; a quoted string with spaces in it (FOO="a b", --prompt="a b",
+    'it'\\''s') spans several of the split words."""
     quote, n = "", len(words)
     while i < n:
         w = words[i]
         i += 1
         if '"' in w or "'" in w:
-            for k, ch in enumerate(w):
+            k = 0
+            while k < len(w):
+                ch = w[k]
                 if quote:
                     if ch == quote:
                         quote = ""
-                elif ch in _QUOTES and (k == 0 or w[k - 1] == "="):
+                    elif ch == "\\" and quote == '"':
+                        k += 1
+                elif ch == "\\":
+                    k += 1
+                elif ch in _QUOTES:
                     quote = ch
+                k += 1
         if not quote:
             break
     return i
@@ -198,9 +214,172 @@ def _command_word(words: List[str]) -> Tuple[str, int]:
     return _name(words[i]), i
 
 
-def segments(command: str) -> List[Segment]:
+# --------------------------------------------------------------------------- command strings
+# Programs that run a command line given as a string. A shell takes it after -c (`bash -lc "..."`); `su`,
+# `runuser`, `script` and `flock` take it after -c / --command wherever that stands among their words.
+_SHELLS = frozenset(("sh", "bash", "zsh", "dash", "ksh", "mksh", "ash", "csh", "tcsh", "fish", "nu", "xonsh", "elvish"))
+_STRING_FLAG_TOOLS = frozenset(("su", "runuser", "script", "flock", "sg", "npx", "npm"))
+_STRING_FLAG_POSITIONAL = {"flock": 1, "npx": 0, "npm": 0}     # the lock file; the program npx runs
+_FLAG_STRING_VALUES = {"flock": frozenset(("-w", "-E", "--timeout", "--wait", "--conflict-exit-code")),
+                       "su": frozenset(("-s", "-g", "-G", "-w", "--shell", "--group", "--supp-group")),
+                       "runuser": frozenset(("-u", "-g", "-G", "-s", "-w", "--user", "--group", "--shell"))}
+_LAUNCHERS = _SHELLS | _STRING_FLAG_TOOLS | frozenset(("eval", "cmd", "powershell", "pwsh", "find", "gfind"))
+_FIND_EXEC = frozenset(("-exec", "-execdir", "-ok", "-okdir"))
+_FIND_END = frozenset((";", "\\;", "';'", '";"', "+"))
+_MAX_NESTING = 3
+
+
+def _dequote(text: str) -> str:
+    """The argument a shell word stands for: quotes removed, `\\"`, `\\\\`, `\\$` and `\\`` undone inside double quotes,
+    a backslash outside quotes keeping the next character."""
+    out: List[str] = []
+    quote = ""
+    k, n = 0, len(text)
+    while k < n:
+        ch = text[k]
+        if quote == "'":
+            if ch == "'":
+                quote = ""
+            else:
+                out.append(ch)
+        elif quote == '"':
+            if ch == '"':
+                quote = ""
+            elif ch == "\\" and k + 1 < n and text[k + 1] in '"\\$`':
+                k += 1
+                out.append(text[k])
+            else:
+                out.append(ch)
+        elif ch in _QUOTES:
+            quote = ch
+        elif ch == "\\" and k + 1 < n:
+            k += 1
+            out.append(text[k])
+        else:
+            out.append(ch)
+        k += 1
+    return "".join(out)
+
+
+def _string_after(words: List[str], i: int) -> str:
+    """The one argument that starts at words[i]."""
+    return _dequote(" ".join(words[i:_after_word(words, i)])) if i < len(words) else ""
+
+
+def _args_after(words: List[str], i: int) -> str:
+    """The arguments from words[i] on, each unquoted, joined by spaces (what `eval` makes a command line of)."""
+    args: List[str] = []
+    while i < len(words):
+        j = _after_word(words, i)
+        args.append(_dequote(" ".join(words[i:j])))
+        i = j
+    return " ".join(args)
+
+
+def _shell_string(words: List[str], i: int) -> List[str]:
+    """The string after the -c of a shell, whose options start at words[i]: -c may be bundled (-lc, -ec), and
+    -o / -O take a value, either the rest of the word or the next word (-eo pipefail). The first word that is not
+    an option is a script file."""
+    n = len(words)
+    while i < n:
+        w = words[i]
+        if len(w) < 2 or w[0] not in "-+" or w == "--":
+            break
+        if w.startswith("--"):
+            i += 2 if w in ("--rcfile", "--init-file") else 1
+            continue
+        for k, c in enumerate(w[1:], 1):
+            if c == "c" and w[0] == "-":
+                return [_string_after(words, i + 1)]
+            if c in "oO":
+                i += 1 if k < len(w) - 1 else 2
+                break
+        else:
+            i += 1
+    return []
+
+
+def _flag_string(words: List[str], i: int, tool: str) -> List[str]:
+    """The string after -c / --command / --session-command / --call of `su`, `runuser`, `script`, `flock`, `sg`,
+    `npx` and `npm exec`, wherever it stands among their words, up to the point where their own arguments end."""
+    n = len(words)
+    free = _STRING_FLAG_POSITIONAL.get(tool, 99)                # words before the string flag that are no options
+    while i < n:
+        w = words[i]
+        if w == "--":
+            break
+        if w.startswith("--"):
+            name, eq, _ = w.partition("=")
+            if name in ("--command", "--session-command", "--call"):
+                if eq:
+                    return [_dequote(" ".join(words[i:_after_word(words, i)]).partition("=")[2])]
+                return [_string_after(words, i + 1)]
+            i += 2 if name in _FLAG_STRING_VALUES.get(tool, ()) and not eq else 1
+        elif w[:1] == "-" and len(w) > 1:
+            if w in _FLAG_STRING_VALUES.get(tool, ()):
+                i += 2
+                continue
+            k = w.find("c", 1)                                  # -c, -lc, -qec: the string is the next word
+            if k > 0:
+                glued = [w[k + 1:]] + words[i + 1:] if w[k + 1:] else []     # su -c"id": the string is part of the word
+                return [_dequote(" ".join(glued[:_after_word(glued, 0)]))] if glued else [_string_after(words, i + 1)]
+            i += 1
+        elif tool == "npm" and w in ("exec", "x"):
+            i += 1
+        elif free == 0:
+            break
+        else:
+            free -= 1
+            i += 1
+    return []
+
+
+def _nested_commands(seg: Segment) -> List[str]:
+    """Command lines a segment hands to another shell: the string of `sh -c`, `su -c`, `flock -c` or `script -c`,
+    what `eval`, `cmd /c` and `powershell -Command` run, and the commands of `find -exec`."""
+    words, n = seg.words, len(seg.words)
+    if seg.tool_pos < 0 or (seg.tool_pos == 0 and seg.tool not in _LAUNCHERS):
+        return []
+    for j in range(seg.tool_pos + 1):                           # runuser is a wrapper: its user name is the "tool"
+        if _name(words[j]) in _LAUNCHERS:
+            break
+    else:
+        return []
+    tool, i = _name(words[j]), j + 1
+    if tool in _SHELLS:
+        return _shell_string(words, i)
+    if tool in _STRING_FLAG_TOOLS:
+        return _flag_string(words, i, tool)
+    if tool == "eval":
+        return [_args_after(words, i)] if i < n else []
+    if tool == "cmd":
+        for j in range(i, n):
+            if words[j].lower() in ("/c", "/k", "/r"):
+                return [_args_after(words, j + 1)]
+    elif tool in ("powershell", "pwsh"):
+        for j in range(i, n):
+            low = words[j].lower()
+            if len(low) > 1 and "-command".startswith(low):
+                return [_args_after(words, j + 1)]
+    elif tool in ("find", "gfind"):
+        out: List[str] = []
+        j = i
+        while j < n:
+            if words[j] in _FIND_EXEC:
+                k = j + 1
+                while k < n and words[k] not in _FIND_END:
+                    k += 1
+                out.append(" ".join(words[j + 1:k]))
+                j = k
+            j += 1
+        return out
+    return []
+
+
+def segments(command: str, _depth: int = 0) -> List[Segment]:
     """Split at shell separators outside quotes. One linear pass; inline code such as
-    `python -c "import requests; requests.post(...)"` stays one segment."""
+    `python -c "import requests; requests.post(...)"` stays one segment. The command lines that a segment
+    hands to another shell (`bash -c "..."`, `eval`, `find -exec`) are split the same way and added."""
     out: List[Segment] = []
     start = 0
     piped = False
@@ -236,6 +415,15 @@ def segments(command: str) -> List[Segment]:
             start = i + 1
         i += 1
     flush(n, False)
+    if _depth < _MAX_NESTING:
+        for seg in list(out):
+            for inner in _nested_commands(seg):
+                nested = segments(inner, _depth + 1)
+                for sub in nested:
+                    sub.start = seg.start
+                if nested:
+                    nested[0].piped = nested[0].piped or seg.piped
+                out.extend(nested)
     return out
 
 
