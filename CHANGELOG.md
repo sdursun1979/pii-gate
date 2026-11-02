@@ -26,6 +26,12 @@
   with a space in it (`FOO="a b" curl ...`, `sudo -p "Password:" curl ...`) no longer hides the command.
   An option missing from the tables fails closed: the next word is taken as the command when it is a
   tool the rules look at. Reported by mattabate (#11).
+- **Commands given as a string were not looked into.** The string of `sh -c`, `bash -lc`, `su -c`,
+  `runuser -c`, `script -c`, `flock -c`, `sg -c` and `npx -c` / `npm exec -c`, what `eval`, `cmd /c` and
+  `powershell -Command` run, and the commands of `find -exec` are now split into segments like a
+  command line of their own, up to three levels deep, so the exfil, git-push and tamper rules see an
+  upload or a `git push` inside them. `parallel`, `entr`, `watchexec`, `systemd-run`, `proot` and `wsl`
+  are skipped like the other wrappers.
 
 ## 0.3.1 (2026-10-25)
 
