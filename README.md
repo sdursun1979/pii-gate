@@ -195,7 +195,7 @@ or with the [pre-commit](https://pre-commit.com) framework:
 ```yaml
 repos:
   - repo: https://github.com/sdursun1979/pii-gate
-    rev: v0.3.1
+    rev: v0.3.2
     hooks:
       - id: pii-gate
 ```

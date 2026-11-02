@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.3.2 (2026-11-02)
+
+Two fixes to the shell rules (an upload or a `git push` behind a wrapper with options, or inside a
+command string, was not seen) and the French social security number detector.
 
 ### Added
 
